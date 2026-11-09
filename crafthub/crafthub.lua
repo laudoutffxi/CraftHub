@@ -651,6 +651,18 @@ local function success_color(s)
 end
 
 -- Word-wrapped text; returns height used.
+-- Big number and small label centred inside a ring, kept clear of its stroke.
+local function ring_label(cx, cy, R, TH, big, lbl)
+    local lh = line_h()
+    local inner = (R - TH * 0.5 - 6) * 2          -- room inside the stroke
+    local sp = 1.5
+    if T.caps_w(lbl, sp) > inner then sp = 0.5 end
+    local bh, gap, ch = lh * 1.5, 1, lh * 0.82
+    local top = cy - (bh + gap + ch) * 0.5
+    text(cx - text_w(big) * 1.5 * 0.5, top, HUD.text, big, 1.5)
+    T.caps(cx - T.caps_w(lbl, sp) * 0.5, top + bh + gap, HUD.faint, lbl, sp)
+end
+
 local function wrap(x, y, w, c, s)
     local lh = line_h()
     local line, yy = '', y
@@ -940,16 +952,14 @@ local function draw_detail(x, y, w, ev, tag, tag_col, pinned)
     local dl = DL()
 
     -- success ring
-    local R, TH = math.floor(lh * 2.25), 7
+    local R, TH = math.floor(lh * 2.6), 7
     local cx, cy = x + R + TH * 0.5, y + R + TH * 0.5 + 2
     local sc = ev.attempt and success_color(ev.success) or HUD.bad
     -- the ring fills up (and the number counts) when the synth changes
     local sv = T.ease('ch_ring', ev.attempt and ev.success or 0, 6)
     T.ring(cx, cy, R, TH, sv, sc)
     local big = ev.attempt and pct(sv) or '-'
-    text(cx - text_w(big) * 1.5 * 0.5, cy - lh * 1.5 * 0.5 - lh * 0.28, HUD.text, big, 1.5)
-    local lbl = ev.attempt and 'SUCCESS' or 'TOO HARD'
-    T.caps(cx - T.caps_w(lbl) * 0.5, cy + lh * 0.42, HUD.faint, lbl)
+    ring_label(cx, cy, R, TH, big, ev.attempt and 'SUCCESS' or 'TOO HARD')
 
     -- recipe + odds, right of the ring
     local tx = x + R * 2 + TH + 18
@@ -1586,12 +1596,15 @@ local function item_line(x, y, w, label, ids, names)
         local nm = names[id] and names[id].n or item_name(id)
         local have = inv_counts[id] or 0
         local piece = ('%s%s'):format(i > 1 and 'or ' or '', nm)
-        local hv = ('  have %d'):format(have)
-        local pw = lh + 6 + text_w(piece) + text_w(hv)
+        local hv = ('have %d'):format(have)
+        local gap = 10
+        local pw = lh + 6 + text_w(piece) + gap + text_w(hv)
         if i > 1 and ix + pw > x + w then ix, yy = x + 56, yy + lh + 6 end
         local ox = ICON.draw(DL(), id, ix, yy - 2, lh + 3) and (lh + 6) or 0
-        text(ix + ox, yy, HUD.text, fit(piece, x + w - ix - ox - text_w(hv)))
-        local tx = ix + ox + math.min(text_w(piece), x + w - ix - ox - text_w(hv))
+        local room = x + w - ix - ox - gap - text_w(hv)
+        local shown = fit(piece, room)
+        text(ix + ox, yy, HUD.text, shown)
+        local tx = ix + ox + text_w(shown) + gap
         text(tx, yy, have > 0 and HUD.owned or HUD.faint, hv)
         ix = tx + text_w(hv) + 14
     end
@@ -1603,13 +1616,12 @@ local function fish_detail(x, y, w, ev, tag, tag_col)
     local dl = DL()
     local f = ev.fish
     -- skill-up ring
-    local R, TH = math.floor(lh * 2.25), 7
+    local R, TH = math.floor(lh * 2.6), 7
     local cx, cy = x + R + TH * 0.5, y + R + TH * 0.5 + 2
     local sv = T.ease('ch_fring', ev.chance, 6)
     T.ring(cx, cy, R, TH, sv, ev.chance > 0 and success_color(math.min(1, ev.chance + 0.4)) or HUD.bad)
     local big = pct(sv)
-    text(cx - text_w(big) * 1.5 * 0.5, cy - lh * 1.5 * 0.5 - lh * 0.28, HUD.text, big, 1.5)
-    T.caps(cx - T.caps_w('SKILL-UP') * 0.5, cy + lh * 0.42, HUD.faint, 'SKILL-UP')
+    ring_label(cx, cy, R, TH, big, 'SKILL-UP')
     -- fish + odds
     local tx = x + R * 2 + TH + 18
     local tw = x + w - tx
