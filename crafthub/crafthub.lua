@@ -1438,6 +1438,23 @@ local function render_best()
         switch('##ch_follow', 'Follow skill-ups', 'follow')
         switch('##ch_mini', 'Mini window', 'mini')
         switch('##ch_kits', 'Guild kits (to 50)', 'kits')
+        -- quick on/off for the guild NPC's advanced synthesis support (+3, this craft only)
+        do
+            local g = gear_for(k)
+            local label = 'Synth support +3'
+            local tw = toggle_w(label)
+            widest = math.max(widest, tw)
+            if cx > x and cx + tw > x + w then cx, cy = x, cy + rowh + 6 end
+            if toggle_chip('##ch_support', label, (tonumber(g.support) or 0) == 3, cx, cy + (rowh - (lh + 10)) * 0.5) then
+                g.support = ((tonumber(g.support) or 0) == 3) and 0 or 3
+                apply_rules(); save_settings()
+            end
+            if imgui.IsItemHovered() then
+                imgui.SetTooltip(('Advanced synthesis support from the %s guild: +3 %s while the buff is on.')
+                    :format(C.CRAFTS[k].name, C.CRAFTS[k].name))
+            end
+            cx = cx + tw + 14
+        end
         ui.ctl_need = widest
         return cy - y + rowh
     end)

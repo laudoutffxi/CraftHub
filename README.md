@@ -91,6 +91,8 @@ The gear in the top-right corner opens Settings. You can also type `/craft setti
 
 Your effective skill (for example Bonecraft 24 + 15 = 39) is shown under the toggles.
 
+The **Synth support +3** switch on the Best synth page turns advanced synthesis support on or off for the craft you're looking at, so you can flip it when you pick up or lose the buff. It's the same setting as Synthesis support in Settings.
+
 **Fishing:** Mega Moglification: Fishing (+5), Fisher's Torque (+2), Fisherman's / Angler's tunica, gloves and hose (+1 each), and boots (+1) or waders (+2). On LSB, set the fishing skill-up rate here too.
 
 **General:** best-synth mode (Safe / Balanced / Fast), follow skill-ups, guild kits, mini window, and showing the whole guide path.
