@@ -286,6 +286,10 @@ local function char_tenths()
     return state.tenths[n]
 end
 
+local PAIR_WINDOW = 3         -- seconds (wall clock); skill-up messages come in the same burst
+local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
+local ahead_warned = {}
+
 local function refresh_skills()
     local saved = char_tenths() or {}
     for k = 1, 8 do
@@ -304,9 +308,18 @@ local function refresh_skills()
         local t = saved[C.CRAFTS[k].key]
         if t and t[1] == s.level then
             s.dec, s.dec_known = math.min(9, t[2]), true
-        elseif t and t[1] == s.level + 1 and not s.capped then
-            -- counted past the level before the server says so: hold at N.9 until it does
-            s.dec, s.dec_known = 9, true
+        elseif t and t[1] > s.level and not s.capped then
+            -- counted past the level but the server hasn't levelled you: the saved decimal
+            -- is too high, so show N.? until the next level-up (or /craft level) fixes it
+            s.dec, s.dec_known, s.ahead = 0, false, true
+            local key = C.CRAFTS[k].key
+            local r = recent[key]
+            -- give a level-up message a moment to arrive before calling it wrong
+            if not ahead_warned[k] and not (r and os.time() - r.at <= PAIR_WINDOW) then
+                ahead_warned[k] = true
+                msg(('%s: the saved decimal was too high (it counted past %d without a level-up), so it shows %d.? until your next level-up. To fix it now: /craft level %s <0-9>.')
+                    :format(C.CRAFTS[k].name, s.level, s.level, key))
+            end
         else
             s.dec, s.dec_known = 0, false
         end
@@ -327,7 +340,7 @@ local function refresh_fishing()
     local f = { level = lv or 0, rank = rk or 0, capped = cap or false }
     local t = (char_tenths() or {}).fish
     if t and t[1] == f.level then f.dec, f.dec_known = math.min(9, t[2]), true
-    elseif t and t[1] == f.level + 1 and not f.capped then f.dec, f.dec_known = 9, true
+    elseif t and t[1] > f.level and not f.capped then f.dec, f.dec_known = 0, false
     else f.dec, f.dec_known = 0, false end
     f.tenths = f.level * 10 + f.dec
     f.cap = C.rank_cap(f.rank)
@@ -566,8 +579,6 @@ end
 -- order, and on boosted servers one skill-up can be 1.0+ points, so each message is
 -- matched with its partner: the level-up never wipes a carried-over decimal
 -- (34.8 + 0.4 = 35.2, not 35.0), and a rise right after a level-up isn't added twice.
-local PAIR_WINDOW = 3         -- seconds (wall clock); both messages come in the same burst
-local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
 
 local function total_of(ent) return ent and (ent[1] * 10 + ent[2]) or nil end
 -- Skill after a skill-up of `amount` that reached level N. Right before it you were
@@ -687,10 +698,12 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
             state.session[k] = ss
             track_rise(C.CRAFTS[k].key, p2)
             do local ent = char_tenths() and char_tenths()[C.CRAFTS[k].key]
-                trace('%s rises %.1f -> %s', C.CRAFTS[k].name, p2 / 10, ent and ('%d.%d'):format(ent[1], ent[2]) or 'decimal not known yet') end
+                trace('%s rises %.1f -> %s', C.CRAFTS[k].name, p2 / 10, ent and ('%d.%d'):format(ent[1], ent[2]) or 'decimal not known yet')
+            end
             if state.follow then state.craft = k end
         elseif mid == 53 then      -- skill reaches level N
             track_level(C.CRAFTS[k].key, p2)
+            ahead_warned[k] = nil
             do local ent = char_tenths() and char_tenths()[C.CRAFTS[k].key]
                 trace('%s reaches level %d -> %s', C.CRAFTS[k].name, p2, ent and ('%d.%d'):format(ent[1], ent[2]) or '?') end
             if state.pkt[k] then state.pkt[k][1] = p2 end
@@ -2512,6 +2525,7 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
         if not skills[k] then refresh_skills() end
         if d >= 0 and d <= 9 then
             remember_decimal(k, skills[k].level, d); save_settings()
+            ahead_warned[k] = nil
             msg(('%s set to %d.%d'):format(C.CRAFTS[k].name, skills[k].level, d))
         end
     elseif sub == 'fish' or sub == 'fishing' then
