@@ -581,7 +581,7 @@ local function rebuild()
     local sig = skill_sig()
     if cache.sig == sig then return end
     cache.sig = sig
-    cache.best, cache.best_i, cache.alts, cache.kits, cache.better = {}, {}, {}, {}, {}
+    cache.best, cache.best_i, cache.alts, cache.kits, cache.better, cache.all = {}, {}, {}, {}, {}, {}
     for k = 1, 8 do
         local ev, i = C.best_on_path(D.path[C.CRAFTS[k].key], D.recipes, k, skills, state.mode)
         cache.best[k], cache.best_i[k] = ev, i
@@ -607,9 +607,25 @@ local function rebuild()
             end)
         end
         cache.better[k] = better
+        cache.all[k] = nil   -- every recipe for the craft, built when the ALL tab is opened
         -- nothing left on the guide path: use the best LSB recipe instead
         if not cache.best[k] and cache.alts[k][1] then cache.best[k] = cache.alts[k][1] end
     end
+end
+
+-- Every recipe for craft k on your server (guild kits and CatsEyeXI customs too), by level.
+local function all_recipes(k)
+    if cache.all[k] then return cache.all[k] end
+    local out = {}
+    for _, rec in ipairs(BY_CRAFT[k] or {}) do
+        if C.available(rec) then out[#out + 1] = C.evaluate(rec, k, skills) end
+    end
+    table.sort(out, function(a, b)
+        if a.level ~= b.level then return a.level < b.level end
+        return a.rec.n < b.rec.n
+    end)
+    cache.all[k] = out
+    return out
 end
 
 local function path_row_for(rec_id, k)
@@ -1193,6 +1209,43 @@ end
 -- Tabs
 --------------------------------------------------------------------------------
 
+-- The ALL tab: a scrolling list of every recipe, opened at your level.
+local function draw_all_list(x, y, w, k, top, card_y)
+    local lh = line_h()
+    local rows = all_recipes(k)
+    local rh = lh + 8                              -- recipe_row height + gap
+    -- side by side: fill down to the bottom of the best-synth card; stacked: a fixed height
+    local vh = ui.compact_rows and math.max(rh * 12, (ui.h.ch_dl or 280) - 36 - (y - card_y)) or rh * 14
+    local lv = skills[k].level
+    imgui.SetCursorScreenPos({ x - 8, y })
+    imgui.BeginChild('##ch_all', { w + 16, vh }, false)
+    if ui.all_jump ~= k then                       -- open at your level the first time
+        local first = 1
+        for i, e in ipairs(rows) do if e.level >= lv - 3 then first = i; break end end
+        imgui.SetScrollY((first - 1) * rh)
+        ui.all_jump = k
+    end
+    local cx, cy = imgui.GetCursorScreenPos()
+    local sy = imgui.GetScrollY() or 0
+    local i0 = math.max(1, math.floor(sy / rh))
+    local i1 = math.min(#rows, i0 + math.ceil(vh / rh) + 2)
+    local rx, rw = cx + 8, w - (#rows * rh > vh and 6 or 0)
+    for i = i0, i1 do
+        local e = rows[i]
+        local id = e.rec.id
+        local done = e.level <= lv - 11
+        local st = (state.pin == id and 'pin') or (top(e) and not state.pin and 'best') or (done and 'done') or nil
+        local tag = (top(e) and 'BEST') or (e.rec.cexi and 'CEXI') or (e.rec.kit and 'KIT')
+            or (PATH_SET[k][id] and 'GUIDE') or nil
+        local c = recipe_row(('##all%d'):format(i), rx, cy + 3 + (i - 1) * rh, rw, e, st, tag)
+        if c then state.pin = (state.pin == id) and nil or id end
+    end
+    imgui.SetCursorScreenPos({ cx, cy })
+    imgui.Dummy({ w, #rows * rh + 4 })
+    imgui.EndChild()
+    return vh + 6
+end
+
 local function select_craft_tab(k)
     state.craft = k
     state.tab = 2
@@ -1421,6 +1474,7 @@ local function render_best()
             { 'path', 'PATH' },
             { 'kits', 'GUILD KITS', #kits > 0 and tostring(#kits) or nil },
             { 'alts', 'ALSO GOOD', #alts > 0 and tostring(#alts) or nil },
+            { 'all', 'ALL', tostring(#all_recipes(k)) },
         }
         local picked, tabs_w, th = seg_tabs('ch_list', items, list, x, yy, HUD.accent, true)
         if picked and picked ~= list and not (picked == 'kits' and #kits == 0) then state.list = picked; list = picked end
@@ -1428,6 +1482,8 @@ local function render_best()
         local sub = (list == 'path' and (nb > 0 and ('CatseyeXI guide + %d good right now, click to pin'):format(nb)
                 or 'CatseyeXI crafting guide, click a recipe to pin it'))
             or (list == 'kits' and (state.kits and 'Lv 5-50 from the guild vendors; the price climbs with the level' or 'Off: not used for the best synth'))
+            or (list == 'all' and (C.rules.custom and 'Every recipe incl. kits and CatsEyeXI customs, by level'
+                or 'Every recipe incl. guild kits, by level'))
             or 'Other recipes on your server that skill you up now, no kits'
         local tg = list == 'path' and (state.path_all and 'Hide finished' or 'Show all') or nil
         local tgw = tg and text_w(tg) or 0
@@ -1492,6 +1548,8 @@ local function render_best()
                 text(x + lh + 9, yy, HUD.faint, table.concat(parts, '  \194\183  ') .. '  \194\183  hidden')
                 yy = yy + lh + 2
             end
+        elseif list == 'all' then
+            yy = yy + draw_all_list(x, yy, w, k, top, y)
         else
             local rows = list == 'kits' and kits or alts
             if #rows == 0 then
