@@ -207,6 +207,61 @@ local function item_name(id)
     return n
 end
 
+-- Item stats for the hover card, read from the game client (cached).
+local JOBS = { 'WAR', 'MNK', 'WHM', 'BLM', 'RDM', 'THF', 'PLD', 'DRK', 'BST', 'BRD', 'RNG', 'SAM',
+    'NIN', 'DRG', 'SMN', 'BLU', 'COR', 'PUP', 'DNC', 'SCH', 'GEO', 'RUN' }
+local info_cache = {}
+local function clean_text(t)
+    if type(t) ~= 'string' then return '' end
+    t = t:gsub('\r', ''):gsub('[%z\1-\9\11-\31\127]', ' ')
+    -- keep valid UTF-8 only; the game's own symbol bytes (element icons etc.) are dropped
+    local out, i, n = {}, 1, #t
+    while i <= n do
+        local c = t:byte(i)
+        local len = (c < 0x80 and 1) or (c >= 0xC2 and c <= 0xDF and 2) or (c >= 0xE0 and c <= 0xEF and 3)
+            or (c >= 0xF0 and c <= 0xF4 and 4) or 0
+        local good = len > 0 and i + len - 1 <= n
+        for j = i + 1, i + len - 1 do
+            if not good then break end
+            local cc = t:byte(j)
+            if cc < 0x80 or cc > 0xBF then good = false end
+        end
+        if good then out[#out + 1] = t:sub(i, i + len - 1); i = i + len else i = i + 1 end
+    end
+    return (table.concat(out):gsub('  +', ' '))
+end
+local function item_info(id)
+    if info_cache[id] ~= nil then return info_cache[id] or nil end
+    local ok, info = pcall(function()
+        local it = AshitaCore:GetResourceManager():GetItemById(id)
+        if not it or not it.Id or it.Id == 0 then return nil end
+        local function f(k) local o, v = pcall(function() return it[k] end); return o and v or nil end
+        local desc = ''
+        local d = f('Description')
+        if d then desc = d[1] or d[0] or '' end
+        local i = { name = item_name(id), desc = clean_text(desc), lines = {} }
+        local lv = tonumber(f('Level')) or 0
+        local jobs = tonumber(f('Jobs')) or 0
+        if lv > 0 or jobs > 0 then
+            local names, all = {}, true
+            for j = 1, #JOBS do
+                if bit.band(jobs, bit.lshift(1, j)) ~= 0 then names[#names + 1] = JOBS[j] else all = false end
+            end
+            local js = (#names == 0 and '') or (all and 'All Jobs') or table.concat(names, '/')
+            local line = ((lv > 0) and ('Lv.%d  '):format(lv) or '') .. js
+            if line ~= '' then i.lines[#i.lines + 1] = line:gsub('%s+$', '') end
+        end
+        local stack = tonumber(f('StackSize')) or 0
+        if stack > 1 then i.stack = stack end
+        local flags = tonumber(f('Flags')) or 0
+        if bit.band(flags, 0x8000) ~= 0 then i.rare = true end          -- Rare
+        if bit.band(flags, 0x4000) ~= 0 then i.ex = true end            -- Exclusive
+        return i
+    end)
+    info_cache[id] = (ok and info) or false
+    return info_cache[id] or nil
+end
+
 -- One craft skill from memory: Ashita's player CraftSkills[0] is Fishing, so
 -- Woodworking..Cooking are 1..8. Returns level, rank, capped (or nil).
 local function mem_craft(k)
@@ -278,6 +333,39 @@ end
 
 -- Inventory counts by item id (main inventory, where synth materials have to be).
 local inv_counts, inv_t = {}, -1
+
+-- Hovering an item picture shows its stats. Icons note the hovered item while
+-- drawing; the card is drawn once at the end of the frame so it wins over row tips.
+local tip_item = nil
+local function icon_draw(dl, id, x, y, size)
+    local drawn = ICON.draw(dl, id, x, y, size)
+    if drawn and id and id > 0 then
+        local ok, hov = pcall(imgui.IsMouseHoveringRect, { x, y }, { x + size, y + size })
+        if ok and hov then tip_item = id end
+    end
+    return drawn
+end
+local function draw_item_tip()
+    local id = tip_item
+    tip_item = nil
+    if not id then return end
+    local i = item_info(id)
+    if not i then return end
+    imgui.BeginTooltip()
+    imgui.PushTextWrapPos(imgui.GetFontSize() * 22)
+    local flags = {}
+    if i.rare then flags[#flags + 1] = 'Rare' end
+    if i.ex then flags[#flags + 1] = 'Ex' end
+    imgui.TextColored(HUD.text, i.name .. (#flags > 0 and ('  [' .. table.concat(flags, ' ') .. ']') or ''))
+    if i.desc ~= '' then imgui.TextColored(HUD.subtext, i.desc) end
+    for _, l in ipairs(i.lines) do imgui.TextColored(HUD.muted, l) end
+    if i.stack then imgui.TextColored(HUD.faint, ('Stacks to %d'):format(i.stack)) end
+    local have = inv_counts and inv_counts[id]
+    if have and have > 0 then imgui.TextColored(HUD.owned, ('You have %d'):format(have)) end
+    imgui.PopTextWrapPos()
+    imgui.EndTooltip()
+end
+
 local function refresh_inventory(force)
     if not force and os.clock() - inv_t < 0.75 then return end
     inv_t = os.clock()
@@ -926,7 +1014,7 @@ local function render_craft_picker()
                 local be = cache.best[k]
                 local isz = math.floor(lh * 1.35)
                 if be and cwi >= 90 then
-                    ICON.draw(dl, be.rec.r, cx + cwi - isz - 9, cy + ch - isz - 15, isz)
+                    icon_draw(dl, be.rec.r, cx + cwi - isz - 9, cy + ch - isz - 15, isz)
                 end
             end
             if hov and s then
@@ -958,7 +1046,7 @@ local function draw_ingredients(x, y, w, rec)
         local have = inv_counts[id] or 0
         local ok = have >= need
         local isz = lh + 2
-        if not ICON.draw(DL(), id, cx - 1, yy - 1, isz) then
+        if not icon_draw(DL(), id, cx - 1, yy - 1, isz) then
             if crystal then
                 dot(cx + 5, yy + lh * 0.5, 4, ELEMENT_COLOR[id] or HUD.accent, 0.3)
             else
@@ -999,7 +1087,7 @@ local function draw_detail(x, y, w, ev, tag, tag_col, pinned)
     local tw = x + w - tx
     local ty = y + 2
     local isz = 36
-    local has_icon = ICON.draw(dl, rec.r, x + w - isz, y + 2, isz)
+    local has_icon = icon_draw(dl, rec.r, x + w - isz, y + 2, isz)
     if has_icon then
         T.chamfer_line(x + w - isz - 0.5, y + 1.5, isz + 1, isz + 1, 6, col(HUD.edge, 0.16), 1)
     end
@@ -1165,7 +1253,7 @@ local function recipe_row(id, x, y, w, ev, rowstate, extra_pill)
     local dim = rowstate == 'done'
     local dc = dim and HUD.faint or (ev.can_skill and diff_color(ev.d) or HUD.faint)
     local glow = rowstate == 'best' and (0.4 + pulse(2) * 0.6) or 0
-    if ICON.draw(dl, ev.rec.r, x - 1, y - 2, lh + 3) then
+    if icon_draw(dl, ev.rec.r, x - 1, y - 2, lh + 3) then
         dot(x + lh, y + lh - 1, 3, dc, glow)          -- difficulty badge on the icon's corner
     else
         dot(x + 6, y + lh * 0.5, 3.5, dc, glow)
@@ -1317,7 +1405,7 @@ local function render_overview()
             text(px, py, HUD.faint, 'BEST NOW')
             py = py + lh + 2
             local isz = lh * 2 + 2
-            local ox = ICON.draw(DL(), ev.rec.r, px, py, isz) and (isz + 8) or 0
+            local ox = icon_draw(DL(), ev.rec.r, px, py, isz) and (isz + 8) or 0
             text(px + ox, py, HUD.text, fit(ev.rec.n, pw - 50 - ox))
             rtext(px + pw, py, HUD.subtext, ('Lv %d'):format(ev.level))
             py = py + lh + 2
@@ -1367,7 +1455,7 @@ local function draw_counterpart(x, y, w, ev)
     yy = yy + lh + 6
     -- name + stats: laid out left to right, wrapping onto new lines inside the card
     local isz = lh + 4
-    local ox = ICON.draw(DL(), other.rec.r, x, yy - 2, isz) and (isz + 8) or 0
+    local ox = icon_draw(DL(), other.rec.r, x, yy - 2, isz) and (isz + 8) or 0
     local parts = {
         { other.rec.n, HUD.text },
         { ('Lv %d'):format(other.level), HUD.muted },
@@ -1711,7 +1799,7 @@ local function item_line(x, y, w, label, ids, names)
         local gap = 10
         local pw = lh + 6 + text_w(piece) + gap + text_w(hv)
         if i > 1 and ix + pw > x + w then ix, yy = x + 56, yy + lh + 6 end
-        local ox = ICON.draw(DL(), id, ix, yy - 2, lh + 3) and (lh + 6) or 0
+        local ox = icon_draw(DL(), id, ix, yy - 2, lh + 3) and (lh + 6) or 0
         local room = x + w - ix - ox - gap - text_w(hv)
         local shown = fit(piece, room)
         text(ix + ox, yy, HUD.text, shown)
@@ -1738,7 +1826,7 @@ local function fish_detail(x, y, w, ev, tag, tag_col)
     local tw = x + w - tx
     local ty = y + 2
     local isz = 36
-    local has_icon = ICON.draw(dl, f.id or 0, x + w - isz, y + 2, isz)
+    local has_icon = icon_draw(dl, f.id or 0, x + w - isz, y + 2, isz)
     local nw = tw - (has_icon and (isz + 10) or 0)
     pill(tx, ty, tag, tag_col or HUD.accent, 0.14)
     ty = ty + lh + 4
@@ -1798,7 +1886,7 @@ local function fish_row(id, x, y, w, ev, rowstate, extra)
     end
     local dim = rowstate == 'done'
     local dc = dim and HUD.faint or (ev.can_skill and HUD.owned or HUD.faint)
-    if ICON.draw(dl, ev.fish.id or 0, x - 1, y - 2, lh + 3) then dot(x + lh, y + lh - 1, 3, dc)
+    if icon_draw(dl, ev.fish.id or 0, x - 1, y - 2, lh + 3) then dot(x + lh, y + lh - 1, 3, dc)
     else dot(x + 6, y + lh * 0.5, 3.5, dc) end
     local rc = ui.compact_rows and ROW_COLS.compact or ROW_COLS.full
     local nx = x + lh + 9
@@ -2275,7 +2363,7 @@ local function render_mini()
         y = y + 10
         if ev then
             local isz = lh * 2 + 4
-            local ox = ICON.draw(DL(), ev.rec.r, x, y, isz) and (isz + 8) or 0
+            local ox = icon_draw(DL(), ev.rec.r, x, y, isz) and (isz + 8) or 0
             text(x + ox, y, HUD.text, fit(ev.rec.n, w - 70 - ox))
             rtext(x + w, y, HUD.subtext, ('Lv %d'):format(ev.level))
             y = y + lh + 4
@@ -2288,6 +2376,7 @@ local function render_mini()
         imgui.Dummy({ w, lh * 3 + 10 })
         drag_window(mini_win)
     end
+    draw_item_tip()
     imgui.End()
     T.pop_font(fp)
     T.pop_style()
@@ -2528,6 +2617,7 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
         end
         if not win.sdrag then drag_window(win) end
     end
+    draw_item_tip()
     imgui.End()
     T.pop_font(font_pushed)
     T.pop_style()

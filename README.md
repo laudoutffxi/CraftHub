@@ -25,7 +25,7 @@ Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's Yun
   - Two lists: **CEXI route** (the guide's fish from 1 to 110) and **All fish** (every fish with a fishing spot that skills you up now, best first). Click a row to pin it.
   - Your rank, the rank-up test fish, and skill gained this session.
 - **Mini window** (`/craft mini`): a small strip with your focused craft, its level and the best synth, for while you're crafting.
-- **Item icons**: every recipe, ingredient and crystal shows its in-game icon. Icons are read straight from your own FFXI client through Ashita, so nothing is downloaded or bundled. If an icon can't be loaded, a coloured dot is shown instead.
+- **Item icons**: every recipe, ingredient and crystal shows its in-game icon. Icons are read straight from your own FFXI client through Ashita, so nothing is downloaded or bundled. If an icon can't be loaded, a coloured dot is shown instead. Hover over any item picture to see the item's stats: its description (DEF, DMG, Delay, bonuses), level and jobs, Rare / Ex, stack size, and how many you're holding.
 - **Session tracking**: skill gained and synth count this session. Your exact decimal (e.g. 34.6) is shown once you've had a level-up message, and is remembered between sessions.
 
 ## How "best" is worked out
