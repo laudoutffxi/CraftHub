@@ -575,11 +575,13 @@ end
 local PATH_SET = {}
 for k = 1, 8 do PATH_SET[k] = path_recs(k) end
 
+local BETTER_MARGIN = 1.05   -- 5% better than the guide's pick to join the path
+
 local function rebuild()
     local sig = skill_sig()
     if cache.sig == sig then return end
     cache.sig = sig
-    cache.best, cache.best_i, cache.alts, cache.kits = {}, {}, {}, {}
+    cache.best, cache.best_i, cache.alts, cache.kits, cache.better = {}, {}, {}, {}, {}
     for k = 1, 8 do
         local ev, i = C.best_on_path(D.path[C.CRAFTS[k].key], D.recipes, k, skills, state.mode)
         cache.best[k], cache.best_i[k] = ev, i
@@ -590,6 +592,21 @@ local function rebuild()
         end
         cache.kits[k] = C.kits(BY_CRAFT[k], k, skills)
         cache.alts[k] = C.alternatives(BY_CRAFT[k], k, skills, state.mode, 8, PATH_SET[k], false)
+        -- recipes off the guide that beat its best pick right now join the path (in level
+        -- order) until you out-level them; they stay in Also good either way
+        local better = {}
+        local ps = C.score(ev, state.mode)
+        if ps > 0 then
+            for _, a in ipairs(C.alternatives(BY_CRAFT[k], k, skills, state.mode, 6, PATH_SET[k], false)) do
+                if a.score > ps * BETTER_MARGIN then better[#better + 1] = a end
+            end
+            if better[1] and C.score(better[1], state.mode) > C.score(cache.best[k], state.mode) then cache.best[k] = better[1] end
+            table.sort(better, function(a, b)
+                if a.level ~= b.level then return a.level < b.level end
+                return a.rec.id < b.rec.id
+            end)
+        end
+        cache.better[k] = better
         -- nothing left on the guide path: use the best LSB recipe instead
         if not cache.best[k] and cache.alts[k][1] then cache.best[k] = cache.alts[k][1] end
     end
@@ -1404,7 +1421,9 @@ local function render_best()
         }
         local picked, tabs_w, th = seg_tabs('ch_list', items, list, x, yy, HUD.accent, true)
         if picked and picked ~= list and not (picked == 'kits' and #kits == 0) then state.list = picked; list = picked end
-        local sub = (list == 'path' and 'CatseyeXI crafting guide, click a recipe to pin it')
+        local nb = #(cache.better[k] or {})
+        local sub = (list == 'path' and (nb > 0 and ('CatseyeXI guide + %d better right now, click to pin'):format(nb)
+                or 'CatseyeXI crafting guide, click a recipe to pin it'))
             or (list == 'kits' and (state.kits and 'Lv 5-50 from the guild vendors; the price climbs with the level' or 'Off: not used for the best synth'))
             or 'Other recipes on your server that skill you up now, no kits'
         local tg = list == 'path' and (state.path_all and 'Hide finished' or 'Show all') or nil
@@ -1427,8 +1446,21 @@ local function render_best()
             local path = D.path[C.CRAFTS[k].key] or {}
             local hidden, later = 0, 0
             local s = skills[k]
+            local better, bn = cache.better[k] or {}, 1
+            local function draw_better(upto)
+                while better[bn] and (upto == nil or better[bn].level <= upto) do
+                    local e = better[bn]
+                    local id = e.rec.id
+                    local st = (state.pin == id and 'pin') or (best_rec == id and not state.pin and 'best') or nil
+                    local c, h = recipe_row(('##better%d'):format(bn), x, yy, w, e, st, best_rec == id and 'BEST' or 'BETTER')
+                    if c then state.pin = (state.pin == id) and nil or id end
+                    yy = yy + h
+                    bn = bn + 1
+                end
+            end
             for i, row in ipairs(path) do
                 local rec = row.rec and D.recipes[row.rec]
+                draw_better((rec and rec.lv[k] or row.cap or 0) - 1)
                 if rec then
                     local e = C.evaluate(rec, k, skills)
                     local done = (rec.lv[k] or 0) <= s.level - 11
@@ -1448,6 +1480,7 @@ local function render_best()
                     yy = yy + lh + 8
                 end
             end
+            draw_better(nil)
             if hidden > 0 or later > 0 then
                 local parts = {}
                 if hidden > 0 then parts[#parts + 1] = ('%d done'):format(hidden) end
