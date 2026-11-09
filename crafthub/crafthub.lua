@@ -288,7 +288,6 @@ end
 
 local PAIR_WINDOW = 3         -- seconds (wall clock); skill-up messages come in the same burst
 local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
-local ahead_warned = {}
 
 local function refresh_skills()
     local saved = char_tenths() or {}
@@ -312,14 +311,6 @@ local function refresh_skills()
             -- counted past the level but the server hasn't levelled you: the saved decimal
             -- is too high, so show N.? until the next level-up (or /craft level) fixes it
             s.dec, s.dec_known, s.ahead = 0, false, true
-            local key = C.CRAFTS[k].key
-            local r = recent[key]
-            -- give a level-up message a moment to arrive before calling it wrong
-            if not ahead_warned[k] and not (r and os.time() - r.at <= PAIR_WINDOW) then
-                ahead_warned[k] = true
-                msg(('%s: the saved decimal was too high (it counted past %d without a level-up), so it shows %d.? until your next level-up. To fix it now: /craft level %s <0-9>.')
-                    :format(C.CRAFTS[k].name, s.level, s.level, key))
-            end
         else
             s.dec, s.dec_known = 0, false
         end
@@ -703,7 +694,6 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
             if state.follow then state.craft = k end
         elseif mid == 53 then      -- skill reaches level N
             track_level(C.CRAFTS[k].key, p2)
-            ahead_warned[k] = nil
             do local ent = char_tenths() and char_tenths()[C.CRAFTS[k].key]
                 trace('%s reaches level %d -> %s', C.CRAFTS[k].name, p2, ent and ('%d.%d'):format(ent[1], ent[2]) or '?') end
             if state.pkt[k] then state.pkt[k][1] = p2 end
@@ -832,6 +822,11 @@ local function hq_label(ev)
     return ('%s  \194\183  tier %d (%s)'):format(pct2(ev.hq), ev.hq_tier, C.HQ_RANGE[ev.hq_tier])
 end
 local function pts(tenths) return ('%.1f'):format(tenths / 10) end
+-- A skill as shown everywhere: 34.6 when the decimal is known, 34.? until it is.
+local function lvl_text(s)
+    if s.dec_known then return pts(s.tenths) end
+    return s.level > 0 and (tostring(s.level) .. '.?') or tostring(s.level)
+end
 local function per_synth(ev) return ev.gain > 0 and ('+%.3f'):format(ev.gain / 10) or '-' end
 
 local function diff_label(d)
@@ -1037,7 +1032,7 @@ local function render_header()
             local s = skills[state.craft]
             local r = rules_info()
             local info = ('  \194\183  %s %s  \194\183  %s: %s, rate x%s, size x%s'):format(C.CRAFTS[state.craft].name,
-                s and (s.dec_known and pts(s.tenths) or tostring(s.level)) or '?', r.label,
+                s and lvl_text(s) or '?', r.label,
                 r.modern and 'modern' or 'era', tostring(r.rate), tostring(r.amount))
             local left = info_w - text_w(wn)
             if left > 20 then text(x + text_w(wn), iy, HUD.faint, fit(info, left)) end
@@ -1085,7 +1080,7 @@ local function render_craft_picker()
             -- state dot: gold = rank test open, orange = capped
             local st = s and (s.capped and HUD.warn or (s.level >= s.cap - 2 and HUD.gold or nil))
             if st then dot(cx + cwi - 11, cy + 8 + lh * 0.42, 3, st, on and 0.6 or 0) end
-            local lv = s and (s.dec_known and pts(s.tenths) or tostring(s.level)) or '-'
+            local lv = s and lvl_text(s) or '-'
             local ly = cy + 8 + math.floor(lh * 0.85) + 2
             text(px, ly, on and { 1, 1, 1, 1 } or HUD.text, lv, 1.3)
             if s then
@@ -1260,7 +1255,7 @@ local function draw_rank(x, y, w, k)
     local yy = y
     local rn = C.rank_name(s.rank)
     T.heading(x, yy, c.name, rn, s.capped and HUD.warn or nil)
-    local lv = s.dec_known and pts(s.tenths) or (tostring(s.level) .. (s.level > 0 and '.?' or ''))
+    local lv = lvl_text(s)
     rtext(x + w, yy, HUD.text, ('%s / %d'):format(lv, s.cap))
     yy = yy + lh + 6
     local base = s.cap - 10
@@ -1472,7 +1467,7 @@ local function render_overview()
         local px, py, pw = x + 12, y + 10, cw - 24
         T.crystal(px + 5, py + lh * 0.5, 8, 15, ec or HUD.faint, { hollow = ec == nil })
         text(px + 16, py, state.craft == k and HUD.accent2 or HUD.text, c.name)
-        local lv = s.dec_known and pts(s.tenths) or tostring(s.level)
+        local lv = lvl_text(s)
         rtext(px + pw, py, HUD.text, lv)
         py = py + lh + 4
         text(px, py, HUD.muted, ('%s  \194\183  cap %d'):format(C.rank_name(s.rank), s.cap))
@@ -2008,7 +2003,7 @@ local function render_fishing()
         local picked, mw, th = seg_tabs('ch_fmode', items, state.mode, x, y, HUD.accent, true)
         if picked and picked ~= state.mode then state.mode = picked; save_settings() end
         local info = ('Fishing %s / %d  \194\183  skill-up rate x%s%s'):format(
-            fishing.dec_known and pts(fishing.tenths) or tostring(fishing.level), fishing.cap, tostring(FM.rules.rate),
+            lvl_text(fishing), fishing.cap, tostring(FM.rules.rate),
             FM.rules.bonus > 0 and ('  \194\183  gear +%d (%d to land fish)'):format(FM.rules.bonus, fishing.level + FM.rules.bonus) or '')
         if mw + 18 + text_w(info) <= w then
             text(x + mw + 18, y + (th - lh) * 0.5, HUD.muted, info)
@@ -2094,7 +2089,7 @@ local function render_fishing()
         local name = 'Fishing'
         text(x, yy, HUD.accent2, name)
         text(x + text_w(name) + 10, yy, HUD.muted, C.rank_name(fishing.rank))
-        rtext(x + w, yy, HUD.text, ('%s / %d'):format(fishing.dec_known and pts(fishing.tenths) or tostring(fishing.level), fishing.cap))
+        rtext(x + w, yy, HUD.text, ('%s / %d'):format(lvl_text(fishing), fishing.cap))
         yy = yy + lh + 6
         bar(x, yy, w, 5, (fishing.tenths - (fishing.cap - 10) * 10) / 100, fishing.capped and HUD.warn or HUD.accent)
         yy = yy + 15
@@ -2434,7 +2429,7 @@ local function render_mini()
     if imgui.Begin('crafthub mini##crafthub_mini', state.mini_open, flags) then
         local x, y = imgui.GetCursorScreenPos()
         local w = W - 28
-        local lv = s.dec_known and pts(s.tenths) or tostring(s.level)
+        local lv = lvl_text(s)
         T.crystal(x + 5, y + lh * 0.5, 8, 15, HUD.accent, { glow = 0.5 })
         text(x + 16, y, HUD.accent2, C.CRAFTS[k].name)
         text(x + 16 + text_w(C.CRAFTS[k].name) + 8, y, HUD.text, lv)
@@ -2525,7 +2520,6 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
         if not skills[k] then refresh_skills() end
         if d >= 0 and d <= 9 then
             remember_decimal(k, skills[k].level, d); save_settings()
-            ahead_warned[k] = nil
             msg(('%s set to %d.%d'):format(C.CRAFTS[k].name, skills[k].level, d))
         end
     elseif sub == 'fish' or sub == 'fishing' then
