@@ -1394,6 +1394,9 @@ local function render_best()
     local kits = cache.kits[k] or {}
     local alts = cache.alts[k] or {}
     local best_rec = cache.best[k] and cache.best[k].rec.id
+    -- anything scoring the same as the best synth (within 0.5%) is tagged BEST too
+    local best_score = cache.best[k] and C.score(cache.best[k], state.mode) or -1
+    local function top(e) return e and best_score > 0 and C.score(e, state.mode) >= best_score * 0.995 end
     local list = state.list or 'path'
     if list == 'kits' and #kits == 0 then list = 'path' end
 
@@ -1422,7 +1425,7 @@ local function render_best()
         local picked, tabs_w, th = seg_tabs('ch_list', items, list, x, yy, HUD.accent, true)
         if picked and picked ~= list and not (picked == 'kits' and #kits == 0) then state.list = picked; list = picked end
         local nb = #(cache.better[k] or {})
-        local sub = (list == 'path' and (nb > 0 and ('CatseyeXI guide + %d better right now, click to pin'):format(nb)
+        local sub = (list == 'path' and (nb > 0 and ('CatseyeXI guide + %d good right now, click to pin'):format(nb)
                 or 'CatseyeXI crafting guide, click a recipe to pin it'))
             or (list == 'kits' and (state.kits and 'Lv 5-50 from the guild vendors; the price climbs with the level' or 'Off: not used for the best synth'))
             or 'Other recipes on your server that skill you up now, no kits'
@@ -1451,8 +1454,8 @@ local function render_best()
                 while better[bn] and (upto == nil or better[bn].level <= upto) do
                     local e = better[bn]
                     local id = e.rec.id
-                    local st = (state.pin == id and 'pin') or (best_rec == id and not state.pin and 'best') or nil
-                    local c, h = recipe_row(('##better%d'):format(bn), x, yy, w, e, st, best_rec == id and 'BEST' or 'BETTER')
+                    local st = (state.pin == id and 'pin') or (top(e) and not state.pin and 'best') or nil
+                    local c, h = recipe_row(('##better%d'):format(bn), x, yy, w, e, st, top(e) and 'BEST' or 'GOOD')
                     if c then state.pin = (state.pin == id) and nil or id end
                     yy = yy + h
                     bn = bn + 1
@@ -1470,8 +1473,8 @@ local function render_best()
                     elseif far and not state.path_all then
                         later = later + 1
                     else
-                        local st = (state.pin == rec.id and 'pin') or (best_rec == rec.id and not state.pin and 'best') or (done and 'done') or nil
-                        local c, h = recipe_row(('##path%d'):format(i), x, yy, w, e, st, best_rec == rec.id and 'BEST' or nil)
+                        local st = (state.pin == rec.id and 'pin') or (top(e) and not state.pin and 'best') or (done and 'done') or nil
+                        local c, h = recipe_row(('##path%d'):format(i), x, yy, w, e, st, top(e) and 'BEST' or nil)
                         if c then state.pin = (state.pin == rec.id) and nil or rec.id end
                         yy = yy + h
                     end
@@ -1498,9 +1501,9 @@ local function render_best()
             local lv = skills[k].level
             for i, e in ipairs(rows) do
                 local done = list == 'kits' and e.level <= lv - 11
-                local st = (state.pin == e.rec.id and 'pin') or (best_rec == e.rec.id and not state.pin and 'best') or (done and 'done') or nil
+                local st = (state.pin == e.rec.id and 'pin') or (top(e) and not state.pin and 'best') or (done and 'done') or nil
                 local c, h = recipe_row(('##%s%d'):format(list, i), x, yy, w, e, st,
-                    best_rec == e.rec.id and 'BEST' or (e.rec.cexi and 'CEXI' or nil))
+                    top(e) and 'BEST' or (e.rec.cexi and 'CEXI' or nil))
                 if c then state.pin = (state.pin == e.rec.id) and nil or e.rec.id end
                 yy = yy + h
             end

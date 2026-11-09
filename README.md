@@ -13,7 +13,7 @@ Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's Yun
   - Any sub-craft requirements, checked against your own levels.
   - Your rank, the rank-up test item when you're at or near a cap, and where the guild is.
   - The CatseyeXI skill-up path for that craft, with the recommended row highlighted. Click any row to pin it.
-  - Any other recipe that beats the guide's best pick at your level (by 5% or more) is added to the path in level order, tagged **BETTER**, and can be the best synth. Once you out-level it, it drops off the path and is only in Also good.
+  - Any other recipe that beats the guide's best pick at your level (by 5% or more) is added to the path in level order, and can be the best synth. The top recipe is tagged **BEST** (several if they score the same) and the added ones just under it are tagged **GOOD**. Once you out-level one, it drops off the path and is only in Also good.
   - "Also good right now": other recipes on your server that skill up well at your level. Guild kits have their own list.
 - **Recipes**: every recipe from 11 levels below your skill in the chosen craft to 11 above. The search box finds any recipe in any craft. Guild kits are tagged KIT, and path recipes are tagged GUIDE.
 - **Guild kits**: the guild-vendor kits from Lv 5 to 50 are listed for each craft with live odds. With the "Guild kits (to 50)" toggle on, a kit becomes the best synth whenever it beats the guide's pick. Kit prices rise steeply with level, so turn the toggle off if you'd rather not buy them. When the best or pinned synth can also be made the other way (normal recipe or guild kit), both versions are shown, each with its ingredients, odds and its own Pin button.
