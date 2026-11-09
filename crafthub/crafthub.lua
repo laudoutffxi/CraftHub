@@ -570,6 +570,13 @@ local PAIR_WINDOW = 3         -- seconds (wall clock); both messages come in the
 local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
 
 local function total_of(ent) return ent and (ent[1] * 10 + ent[2]) or nil end
+-- Skill after a skill-up of `amount` that reached level N. Right before it you were
+-- at most (N-1).9, so the carry-over is at most amount - 0.1; if the count had run
+-- ahead it's pulled back, and if it was behind it's at least N.0.
+local function after_level(prev, amount, level)
+    local new = prev + amount
+    return math.max(level * 10, math.min(new, (level - 1) * 10 + 9 + amount))
+end
 local function set_total(t, key, total)
     t[key] = { math.floor(total / 10), total % 10 }
 end
@@ -582,11 +589,7 @@ local function track_rise(key, amount)
     if r and r.kind == 53 and os.time() - r.at <= PAIR_WINDOW then
         -- the level-up came first: it has already set level N.0
         recent[key] = nil
-        if r.prev then
-            local new = r.prev + amount
-            if math.floor(new / 10) ~= r.level then new = r.level * 10 end
-            set_total(t, key, new)
-        end
+        if r.prev then set_total(t, key, after_level(r.prev, amount, r.level)) end
         return
     end
     if prev then set_total(t, key, prev + amount) end
@@ -600,9 +603,7 @@ local function track_level(key, level)
     recent[key] = nil
     if r and r.kind == 38 and os.time() - r.at <= PAIR_WINDOW and r.prev then
         -- the rise came first and was already added: keep the carry-over if it agrees
-        local new = r.prev + r.amount
-        if math.floor(new / 10) ~= level then new = level * 10 end
-        set_total(t, key, new)
+        set_total(t, key, after_level(r.prev, r.amount, level))
         return
     end
     recent[key] = { kind = 53, at = os.time(), prev = total_of(t[key]), level = level }
