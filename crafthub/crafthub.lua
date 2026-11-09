@@ -13,6 +13,8 @@ local T = require('crafttheme')   -- shared drawing helpers (VanaCore look)
 local C = require('craftcalc')    -- synthesis maths (mirrors LSB synthutils)
 local D = require('crafthub_data')
 local ICON = require('crafticons')  -- item icons from the game client
+local FM = require('craftfish')      -- fishing maths (mirrors LSB fishingutils)
+local FD = require('crafthub_fish')  -- fish, rods, baits, spots, CatsEyeXI route
 
 local HUD, ui, CORNERS_ALL = T.HUD, T.ui, T.CORNERS_ALL
 local rgba, col, pulse, line_h, text_w, DL = T.rgba, T.col, T.pulse, T.line_h, T.text_w, T.DL
@@ -107,6 +109,12 @@ local state = {
     gear = {},          -- [craft key] = { mog, neck, body, hands = bool, support = 0 / 1 / 3 }
     kupo = false,       -- Kupo Shield: synthesis skill +3 to every craft
     gear_craft = nil,   -- craft shown in the skill bonuses panel (nil = focused craft)
+    fish_rate = 1.0,    -- LSB FISHING_SKILL_MULTIPLIER
+    fish_gear = {},     -- mog, torque, body, hands, legs = bool; feet = 0 / 1 (boots) / 2 (waders)
+    fish_pin = nil,     -- fish id pinned on the Fishing tab
+    fish_list = 'route',
+    fish_pkt = nil,     -- fishing skill from the last 0x062 packet
+    fish_session = { gain = 0, ups = 0, caught = 0 },
     tenths = {},        -- [char] = { [craft] = { level, dec } } known decimals
     session = {},       -- [craft] = { gain = tenths, ups = n }
     synths = { ok = 0, broke = 0 },
@@ -252,6 +260,22 @@ local function refresh_skills()
     end
 end
 
+-- Fishing skill: the server's 0x062 packet once seen, else memory (craft slot 0).
+local fishing = { level = 0, rank = 0, capped = false, tenths = 0, dec_known = false, cap = 10 }
+local function refresh_fishing()
+    local p = state.fish_pkt
+    local lv, rk, cap
+    if p then lv, rk, cap = p[1], p[2], p[3] else lv, rk, cap = mem_craft(0) end
+    local f = { level = lv or 0, rank = rk or 0, capped = cap or false }
+    local t = (char_tenths() or {}).fish
+    if t and t[1] == f.level then f.dec, f.dec_known = t[2], true else f.dec, f.dec_known = 0, false end
+    f.tenths = f.level * 10 + f.dec
+    f.cap = C.rank_cap(f.rank)
+    if f.level >= f.cap then f.capped = true end
+    if f.capped then f.dec, f.dec_known, f.tenths = 0, true, f.level * 10 end
+    fishing = f
+end
+
 -- Inventory counts by item id (main inventory, where synth materials have to be).
 local inv_counts, inv_t = {}, -1
 local function refresh_inventory(force)
@@ -300,6 +324,7 @@ local function save_settings()
             path_all = state.path_all, rate = state.rate, modern = state.modern, tenths = state.tenths,
             amount = state.amount, server = state.server, cexi_mode = state.cexi_mode,
             gear = state.gear, kupo = state.kupo,
+            fish_rate = state.fish_rate, fish_gear = state.fish_gear, fish_list = state.fish_list,
             kits = state.kits,
             win_w = state.win_size and state.win_size[1], win_h = state.win_size and state.win_size[2],
         }) .. '\n')
@@ -310,7 +335,7 @@ end
 local function load_settings()
     local ok, d = pcall(dofile, settings_file())
     if not ok or type(d) ~= 'table' then return end
-    if tonumber(d.tab) and d.tab >= 1 and d.tab <= 3 then state.tab = d.tab end
+    if tonumber(d.tab) and d.tab >= 1 and d.tab <= 4 then state.tab = d.tab end
     if tonumber(d.craft) and d.craft >= 1 and d.craft <= 8 then state.craft = d.craft end
     if C.MODES[d.mode or ''] then state.mode = d.mode end
     state.mini = d.mini == true
@@ -330,6 +355,9 @@ local function load_settings()
     if d.cexi_mode == 'ace' or d.cexi_mode == 'cw' or d.cexi_mode == 'wew' or d.cexi_mode == '' then state.cexi_mode = d.cexi_mode end
     if type(d.gear) == 'table' then state.gear = d.gear end
     state.kupo = d.kupo == true
+    if tonumber(d.fish_rate) and d.fish_rate > 0 then state.fish_rate = d.fish_rate end
+    if type(d.fish_gear) == 'table' then state.fish_gear = d.fish_gear end
+    if d.fish_list == 'route' or d.fish_list == 'all' then state.fish_list = d.fish_list end
     if d.modern ~= nil then state.modern = d.modern == true end
     if type(d.tenths) == 'table' then state.tenths = d.tenths end
     if tonumber(d.win_w) and tonumber(d.win_h) then state.win_size = { d.win_w, d.win_h } end
@@ -375,6 +403,23 @@ local function skill_bonus(k)
     return total, table.concat(parts, ', ')
 end
 
+-- Fishing skill from gear and the Fisherman's Stall (LandSandBoat item data: torque +2,
+-- waders +2, fisherman's / angler's tunica, gloves, hose and boots +1; CatsEyeXI guide:
+-- Mega Moglification: Fishing +5). Helps you land fish, not skill-ups.
+local FISH_BONUS = {
+    { key = 'mog',   label = 'Mega Moglification: Fishing', value = 5 },
+    { key = 'torque', label = "Fisher's Torque", value = 2 },
+    { key = 'body',  label = "Fisherman's / Angler's Tunica", value = 1 },
+    { key = 'hands', label = "Fisherman's / Angler's Gloves", value = 1 },
+    { key = 'legs',  label = "Fisherman's / Angler's Hose", value = 1 },
+}
+local FISH_FEET = { { 0, 'NONE' }, { 1, 'BOOTS +1' }, { 2, 'WADERS +2' } }
+local function fish_bonus()
+    local g, t = state.fish_gear or {}, 0
+    for _, b in ipairs(FISH_BONUS) do if g[b.key] then t = t + b.value end end
+    return t + (tonumber(g.feet) or 0)
+end
+
 local function apply_rules()
     local r = rules_info()
     C.rules.spec_points = r.spec_points or 40
@@ -386,6 +431,16 @@ local function apply_rules()
     for k = 1, 8 do C.rules.skill_bonus[k] = skill_bonus(k) end
     -- CatsEyeXI custom recipes and level changes only count on CEXI
     C.rules.custom = state.server == 'cexi'
+    -- fishing: skill-up rate per server, gear bonus, CatsEyeXI fish levels
+    FM.rules.rate = (state.server == 'cexi' and 3.0) or (state.server == 'retail' and 1.0) or state.fish_rate
+    FM.rules.bonus = fish_bonus()
+    for id, lv in pairs(FD.cexi_levels or {}) do
+        local f = FD.fish[id]
+        if f then
+            f.lv_retail = f.lv_retail or f.lv
+            f.lv = C.rules.custom and lv or f.lv_retail
+        end
+    end
     for _, rec in pairs(D.recipes) do
         if rec.lv_cexi then rec.lv = C.rules.custom and rec.lv_cexi or rec.lv_retail end
     end
@@ -427,11 +482,36 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
                 state.pkt[k] = { lv, rk, cap }
             end
         end
+        local okf, vf = pcall(struct.unpack, 'H', e.data, 0x80 + FM.SKILL_ID * 2 + 1)
+        if okf and vf then
+            local lv, rk, cap = C.decode(vf)
+            state.fish_pkt = { lv, rk, cap }
+        end
     elseif e.id == 0x029 then
         local ok, p1, p2, mid = pcall(function()
             return struct.unpack('I', e.data, 0x0C + 1), struct.unpack('I', e.data, 0x10 + 1), struct.unpack('H', e.data, 0x18 + 1)
         end)
         if not ok then return end
+        if p1 == FM.SKILL_ID then              -- fishing skill-up / level-up
+            local me = nil
+            pcall(function() me = AshitaCore:GetMemoryManager():GetParty():GetMemberServerId(0) end)
+            if me and struct.unpack('I', e.data, 0x04 + 1) ~= me then return end
+            local t = char_tenths()
+            if mid == 38 then
+                local fs = state.fish_session
+                fs.gain, fs.ups = fs.gain + p2, fs.ups + 1
+                local ent = t and t.fish
+                if ent then
+                    local nd = ent[2] + p2
+                    if nd < 10 then ent[2] = nd else t.fish = { ent[1] + 1, nd - 10 } end
+                end
+            elseif mid == 53 then
+                if t then t.fish = { p2, 0 } end
+                if state.fish_pkt then state.fish_pkt[1] = p2 end
+                save_settings()
+            end
+            return
+        end
         local k = C.BY_SKILL[p1 or -1]
         if not k then return end
         -- only our own messages: caster id == our server id
@@ -683,6 +763,7 @@ local function render_header()
     local nav = {
         { 2, 'BEST SYNTH' },
         { 3, 'RECIPES' },
+        { 4, 'FISHING', tostring(fishing.level) },
     }
     band('ch_hdr', function(x, y, w)
         local nav_w = seg_width(nav, false)
@@ -1409,6 +1490,339 @@ local function render_best()
     panel('ch_rank', skills[k].capped and HUD.warn or nil, function(x, y, pw) return draw_rank(x, y, pw, k) end)
 end
 
+--------------------------------------------------------------------------------
+-- FISHING: best fish for your skill, with rod, bait and where to fish
+--------------------------------------------------------------------------------
+
+local ROUTE_BY_FISH = {}
+for _, row in ipairs(FD.route) do ROUTE_BY_FISH[row.fish] = row end
+
+local function fish_eval(fid)
+    local f = FD.fish[fid]
+    if not f then return nil end
+    f.id = fid
+    local row = ROUTE_BY_FISH[fid]
+    local town
+    if row then town = row.town else town = FM.all_town(f) end
+    local ev = FM.evaluate(f, fishing, { town = town })
+    ev.row = row
+    return ev
+end
+
+local function fish_best()
+    local best, bs = nil, 0
+    for _, row in ipairs(FD.route) do
+        local ev = fish_eval(row.fish)
+        local sc = FM.score(ev, state.mode)
+        if sc > bs then best, bs = ev, sc end
+    end
+    if best then return best end
+    for fid, f in pairs(FD.fish) do
+        if #f.at > 0 and not f.legend then
+            local ev = fish_eval(fid)
+            local sc = FM.score(ev, state.mode)
+            if sc > bs then best, bs = ev, sc end
+        end
+    end
+    return best
+end
+
+-- Every fish you can skill up on now (with a fishing spot), best first.
+local function fish_all(limit)
+    local out = {}
+    for fid, f in pairs(FD.fish) do
+        if #f.at > 0 and not f.legend then
+            local ev = fish_eval(fid)
+            if ev.can_skill then ev.score = FM.score(ev, state.mode); out[#out + 1] = ev end
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.score ~= b.score then return a.score > b.score end
+        return a.fish.n < b.fish.n
+    end)
+    while #out > (limit or 20) do table.remove(out) end
+    return out
+end
+
+local function fish_rods(ev)
+    if ev.row then return ev.row.rods end
+    return { FM.pick_rod(FD.rods, ev.fish) }
+end
+local function fish_baits(ev)
+    if ev.row then return ev.row.baits end
+    local out = {}
+    for i, b in ipairs(ev.fish.baits) do
+        if i > 2 then break end
+        out[#out + 1] = b[1]
+    end
+    return out
+end
+local function fish_where(ev)
+    if ev.row then return ev.row.where end
+    local parts, n = {}, 0
+    for _, a in ipairs(ev.fish.at) do
+        n = n + 1
+        if n <= 5 then parts[#parts + 1] = a[2] ~= '' and ('%s (%s)'):format(a[1], a[2]) or a[1] end
+    end
+    local s = table.concat(parts, ', ')
+    if n > 5 then s = s .. (', and %d more'):format(n - 5) end
+    return s
+end
+
+local function per_catch(ev) return ev.gain > 0 and ('+%.3f'):format(ev.gain / 10) or '-' end
+local function fish_diff(d)
+    if d > 0 then return ('%d above you'):format(d) end
+    if d == 0 then return 'at your level' end
+    return ('%d below you'):format(-d)
+end
+
+-- One labelled line of items with icons: "ROD   [icon] Halcyon Rod  have 1".
+local function item_line(x, y, w, label, ids, names)
+    local lh = line_h()
+    T.caps(x, y + 1, HUD.faint, label)
+    local ix = x + 56
+    local yy = y
+    for i, id in ipairs(ids) do
+        local nm = names[id] and names[id].n or item_name(id)
+        local have = inv_counts[id] or 0
+        local piece = ('%s%s'):format(i > 1 and 'or ' or '', nm)
+        local hv = ('  have %d'):format(have)
+        local pw = lh + 6 + text_w(piece) + text_w(hv)
+        if i > 1 and ix + pw > x + w then ix, yy = x + 56, yy + lh + 6 end
+        local ox = ICON.draw(DL(), id, ix, yy - 2, lh + 3) and (lh + 6) or 0
+        text(ix + ox, yy, HUD.text, fit(piece, x + w - ix - ox - text_w(hv)))
+        local tx = ix + ox + math.min(text_w(piece), x + w - ix - ox - text_w(hv))
+        text(tx, yy, have > 0 and HUD.owned or HUD.faint, hv)
+        ix = tx + text_w(hv) + 14
+    end
+    return yy - y + lh + 8
+end
+
+local function fish_detail(x, y, w, ev, tag, tag_col)
+    local lh = line_h()
+    local dl = DL()
+    local f = ev.fish
+    -- skill-up ring
+    local R, TH = math.floor(lh * 2.25), 7
+    local cx, cy = x + R + TH * 0.5, y + R + TH * 0.5 + 2
+    local sv = T.ease('ch_fring', ev.chance, 6)
+    T.ring(cx, cy, R, TH, sv, ev.chance > 0 and success_color(math.min(1, ev.chance + 0.4)) or HUD.bad)
+    local big = pct(sv)
+    text(cx - text_w(big) * 1.5 * 0.5, cy - lh * 1.5 * 0.5 - lh * 0.28, HUD.text, big, 1.5)
+    T.caps(cx - T.caps_w('SKILL-UP') * 0.5, cy + lh * 0.42, HUD.faint, 'SKILL-UP')
+    -- fish + odds
+    local tx = x + R * 2 + TH + 18
+    local tw = x + w - tx
+    local ty = y + 2
+    local isz = 36
+    local has_icon = ICON.draw(dl, f.id or 0, x + w - isz, y + 2, isz)
+    local nw = tw - (has_icon and (isz + 10) or 0)
+    pill(tx, ty, tag, tag_col or HUD.accent, 0.14)
+    ty = ty + lh + 4
+    text(tx, ty, HUD.text, fit(f.n, nw, 1.3), 1.3)
+    ty = ty + math.floor(lh * 1.3) + 3
+    local dlbl = fish_diff(ev.d)
+    text(tx, ty, ev.can_skill and HUD.owned or HUD.faint, dlbl)
+    text(tx + text_w(dlbl), ty, HUD.muted, fit(('  \194\183  Lv %d  \194\183  %s fish%s'):format(ev.lv, f.size == 1 and 'large' or 'small',
+        ev.town and '  \194\183  town' or ''), tw - text_w(dlbl)))
+    ty = ty + lh + 12
+    local vx = tx + math.max(text_w('Catches per level'), 100) + 16
+    local stats = {
+        { 'Skill-up chance', pct(ev.chance), ev.chance > 0 and HUD.text or HUD.bad },
+        { 'Per catch', per_catch(ev), ev.gain > 0 and HUD.owned or HUD.bad },
+        { 'Catches per level', ev.per_level and ('~%d'):format(math.ceil(ev.per_level)) or '-', HUD.text },
+        { 'Gets away', ev.lose > 0 and pct(ev.lose) or 'never (skill high enough)', ev.lose > 0.2 and HUD.warn or HUD.muted },
+    }
+    for _, st in ipairs(stats) do
+        text(tx, ty, HUD.faint, st[1])
+        text(vx, ty, st[3], fit(st[2], x + w - vx))
+        ty = ty + lh + 5
+    end
+    local yy = math.max(ty, y + R * 2 + TH + 8) + 6
+    T.rule(x, yy, w); yy = yy + 10
+    -- rod, bait, where
+    local rods = fish_rods(ev)
+    yy = yy + item_line(x, yy, w, 'ROD', rods, FD.rods)
+    yy = yy + item_line(x, yy, w, 'BAIT', fish_baits(ev), FD.baits)
+    T.caps(x, yy + 1, HUD.faint, 'WHERE')
+    yy = yy + wrap(x + 56, yy, w - 56, HUD.subtext, fish_where(ev))
+    -- warnings and notes
+    local notes = {}
+    local issue = FM.rod_issue(FD.rods[rods[1]], f)
+    if issue == 'big' then notes[#notes + 1] = 'It can escape as too big for this rod.' end
+    if issue == 'small' then notes[#notes + 1] = 'A large rod can lose it as too small.' end
+    if ev.row and ev.row.note then notes[#notes + 1] = ev.row.note end
+    if f.ki then notes[#notes + 1] = 'Needs a key item to catch.' end
+    if #notes > 0 then
+        yy = yy + 4
+        yy = yy + wrap(x, yy, w, HUD.warn, table.concat(notes, ' '))
+    end
+    yy = yy + 4
+    yy = yy + wrap(x, yy, w, HUD.faint, "Lu Shang's Fishing Rod lands almost anything, but slows skill-ups below 50. Skill-ups are slower in towns.")
+    return yy - y
+end
+
+local function fish_row(id, x, y, w, ev, rowstate, extra)
+    local dl = DL()
+    local lh = line_h()
+    local h = lh + 6
+    local clicked, hov = hit(id, x - 6, y - 3, w + 12, h)
+    if rowstate == 'best' or rowstate == 'pin' then
+        dl:AddRectFilled({ x - 6, y - 3 }, { x + w + 6, y - 3 + h }, col(HUD.accent, 0.10), 5)
+        dl:AddRect({ x - 6, y - 3 }, { x + w + 6, y - 3 + h }, col(HUD.accent, 0.35), 5, CORNERS_ALL, 1)
+    elseif hov then
+        dl:AddRectFilled({ x - 6, y - 3 }, { x + w + 6, y - 3 + h }, col(HUD.accent, 0.07), 5)
+    end
+    local dim = rowstate == 'done'
+    local dc = dim and HUD.faint or (ev.can_skill and HUD.owned or HUD.faint)
+    if ICON.draw(dl, ev.fish.id or 0, x - 1, y - 2, lh + 3) then dot(x + lh, y + lh - 1, 3, dc)
+    else dot(x + 6, y + lh * 0.5, 3.5, dc) end
+    local rc = ui.compact_rows and ROW_COLS.compact or ROW_COLS.full
+    local nx = x + lh + 9
+    local name_w = w - rc.lv - 30 - (nx - x) - (extra and (pill_w(extra) + 8) or 0)
+    local shown = fit(ev.fish.n, name_w)
+    text(nx, y, dim and HUD.faint or HUD.text, shown)
+    if extra then pill(nx + text_w(shown) + 8, y, extra, HUD.accent2) end
+    rtext(x + w - rc.lv, y, dim and HUD.faint or HUD.subtext, tostring(ev.lv))
+    rtext(x + w - rc.su, y, dim and HUD.faint or (ev.chance > 0 and HUD.text or HUD.faint), ev.chance > 0 and pct(ev.chance) or '-')
+    rtext(x + w - rc.ps, y, dim and HUD.faint or (ev.gain > 0 and HUD.owned or HUD.faint), per_catch(ev))
+    if hov then
+        imgui.SetTooltip(('%s  (Lv %d, %s)\nRod: %s\nBait: %s\n%s\nClick to pin it.'):format(ev.fish.n, ev.lv, fish_diff(ev.d),
+            FD.rods[fish_rods(ev)[1]] and FD.rods[fish_rods(ev)[1]].n or '?',
+            (function() local t = {} for _, b in ipairs(fish_baits(ev)) do t[#t + 1] = FD.baits[b] and FD.baits[b].n or item_name(b) end return table.concat(t, ' or ') end)(),
+            fish_where(ev)))
+    end
+    return clicked, h + 2
+end
+
+local function fish_head(x, y, w)
+    local lh = line_h()
+    local rc = ui.compact_rows and ROW_COLS.compact or ROW_COLS.full
+    T.caps(x + lh + 9, y + lh * 0.1, HUD.faint, 'FISH')
+    for _, c in ipairs({ { rc.lv, 'LV' }, { rc.su, 'SKILL-UP' }, { rc.ps, 'PER CATCH' } }) do
+        T.caps(x + w - c[1] - T.caps_w(c[2]), y + lh * 0.1, HUD.faint, c[2])
+    end
+    T.rule(x - 6, y + lh + 3, w + 12)
+    return lh + 8
+end
+
+local function render_fishing()
+    local lh = line_h()
+    -- controls
+    band('ch_fctl', function(x, y, w)
+        local items = { { 'safe', 'SAFE' }, { 'balanced', 'BALANCED' }, { 'fast', 'FAST' } }
+        local picked, mw, th = seg_tabs('ch_fmode', items, state.mode, x, y, HUD.accent, true)
+        if picked and picked ~= state.mode then state.mode = picked; save_settings() end
+        local info = ('Fishing %s / %d  \194\183  skill-up rate x%s%s'):format(
+            fishing.dec_known and pts(fishing.tenths) or tostring(fishing.level), fishing.cap, tostring(FM.rules.rate),
+            FM.rules.bonus > 0 and ('  \194\183  gear +%d (%d to land fish)'):format(FM.rules.bonus, fishing.level + FM.rules.bonus) or '')
+        if mw + 18 + text_w(info) <= w then
+            text(x + mw + 18, y + (th - lh) * 0.5, HUD.muted, info)
+            return th
+        end
+        text(x, y + th + 6, HUD.muted, fit(info, w))
+        return th + 6 + lh
+    end)
+
+    local pinned = state.fish_pin and FD.fish[state.fish_pin] and fish_eval(state.fish_pin)
+    local best = fish_best()
+    local ev = pinned or best
+    local list = state.fish_list or 'route'
+
+    local function left(x, y, w)
+        if not ev then
+            if fishing.capped then
+                return wrap(x, y, w, HUD.warn, ('You\'re capped at %d - pass the rank test (below) to keep skilling up.'):format(fishing.cap))
+            end
+            return wrap(x, y, w, HUD.muted, 'No fish gives skill-ups at your level.')
+        end
+        local h = fish_detail(x, y, w, ev, pinned and 'PINNED' or 'BEST NOW', pinned and HUD.gold or HUD.accent)
+        if pinned then
+            local clicked, _, bh = T.ghost('##ch_funpin', x + w - T.ghost_w('Unpin'), y + h + 6, 'Unpin')
+            if clicked then state.fish_pin = nil end
+            h = h + 6 + (bh or lh + 10)
+        end
+        return h
+    end
+
+    local function right(x, y, w)
+        local yy = y
+        local items = { { 'route', 'CEXI ROUTE' }, { 'all', 'ALL FISH' } }
+        local picked, _, th = seg_tabs('ch_flist', items, list, x, yy, HUD.accent, true)
+        if picked and picked ~= list then state.fish_list = picked; list = picked; save_settings() end
+        yy = yy + th + 8
+        local sub = list == 'route' and 'CatsEyeXI fishing guide: aim 9-13 levels above you. Click to pin.'
+            or 'Every fish with a fishing spot that skills you up now, best first'
+        text(x, yy, HUD.faint, fit(sub, w))
+        yy = yy + lh + 8
+        yy = yy + fish_head(x, yy, w)
+        local best_id = best and best.fish.id
+        local rows = {}
+        if list == 'route' then
+            for _, row in ipairs(FD.route) do rows[#rows + 1] = fish_eval(row.fish) end
+        else
+            rows = fish_all(20)
+        end
+        if #rows == 0 then text(x + lh + 9, yy, HUD.faint, 'Nothing right now.'); yy = yy + lh + 2 end
+        for i, e in ipairs(rows) do
+            local id = e.fish.id
+            local done = e.lv <= fishing.level
+            local st = (state.fish_pin == id and 'pin') or (best_id == id and not state.fish_pin and 'best') or (done and 'done') or nil
+            local c, h = fish_row(('##fish%d'):format(i), x, yy, w, e, st, best_id == id and 'BEST' or nil)
+            if c then state.fish_pin = (state.fish_pin == id) and nil or id end
+            yy = yy + h
+        end
+        return yy - y
+    end
+
+    local x0, y0 = imgui.GetCursorScreenPos()
+    local w = avail_w()
+    local gap = 10
+    local two = w >= 720
+    local lw = two and math.floor((w - gap) * 0.52) or w
+    local rw = two and (w - gap - lw) or w
+    local hl, hr = ui.h.ch_fl or 280, ui.h.ch_fr or 280
+    local H = math.max(hl, hr)
+    local rx, ry = two and (x0 + lw + gap) or x0, two and y0 or (y0 + hl + gap)
+    if ev then T.hero_card(x0, y0, lw, two and H or hl, HUD.accent) else card_bg(x0, y0, lw, two and H or hl, HUD.warn, 0.55) end
+    ui.h.ch_fl = left(x0 + 16, y0 + 14, lw - 32) + 28
+    card_bg(rx, ry, rw, two and H or hr, nil)
+    ui.compact_rows = two
+    ui.h.ch_fr = right(rx + 14, ry + 12, rw - 28) + 24
+    ui.compact_rows = false
+    imgui.SetCursorScreenPos({ x0, y0 })
+    advance(w, two and H or (hl + gap + hr))
+    imgui.Dummy({ 0, 2 })
+
+    -- rank strip
+    panel('ch_frank', fishing.capped and HUD.warn or nil, function(x, y, w)
+        local yy = y
+        local name = 'Fishing'
+        text(x, yy, HUD.accent2, name)
+        text(x + text_w(name) + 10, yy, HUD.muted, C.rank_name(fishing.rank))
+        rtext(x + w, yy, HUD.text, ('%s / %d'):format(fishing.dec_known and pts(fishing.tenths) or tostring(fishing.level), fishing.cap))
+        yy = yy + lh + 6
+        bar(x, yy, w, 5, (fishing.tenths - (fishing.cap - 10) * 10) / 100, fishing.capped and HUD.warn or HUD.accent)
+        yy = yy + 15
+        local test = FD.tests[fishing.cap]
+        local guild = 'Fishing Guild: Thubu Parohren, Port Windurst.'
+        if fishing.capped then
+            yy = yy + wrap(x, yy, w, HUD.warn, ('Capped: trade %s to rank up. %s'):format(test or 'the test fish', guild))
+        elseif fishing.level >= fishing.cap - 2 then
+            yy = yy + wrap(x, yy, w, HUD.gold, ('Rank test open: %s. %s'):format(test or 'ask the guild master', guild))
+        else
+            text(x, yy, HUD.muted, fit(('Next test at %d: %s'):format(fishing.cap - 2, test or 'ask the guild master'), w))
+            yy = yy + lh + 2
+        end
+        local fs = state.fish_session
+        if fs.ups > 0 then
+            text(x, yy, HUD.owned, ('This session: +%s from %d skill-ups'):format(pts(fs.gain), fs.ups))
+            yy = yy + lh + 2
+        end
+        return yy - y
+    end)
+end
+
 -- RECIPES tab shows recipes this many levels either side of your skill in the chosen craft.
 local RECIPE_SPAN = 11
 
@@ -1636,6 +2050,47 @@ local function render_settings()
         return yy - y
     end)
 
+    -- fishing: skill-up rate and gear that helps you land fish
+    panel('ch_set_fish', nil, function(x, y, w)
+        local yy = y
+        T.heading(x, yy, 'Fishing', 'gear helps you land fish; skill-ups use your real skill')
+        yy = yy + lh + 10
+        if state.server == 'lsb' then
+            local v, h = stepper('##st_frate', x, yy, 'Fishing skill-up rate', state.fish_rate, 0.5, 0.5, 10)
+            if v ~= state.fish_rate then state.fish_rate = v; apply_rules(); save_settings() end
+            yy = yy + h
+            text(x, yy, HUD.faint, 'FISHING_SKILL_MULTIPLIER in settings/map.lua.')
+            yy = yy + lh + 8
+        else
+            text(x, yy, HUD.subtext, ('Skill-up rate x%s (%s)'):format(tostring(FM.rules.rate),
+                state.server == 'cexi' and 'CatsEyeXI, every game mode' or 'retail'))
+            yy = yy + lh + 10
+        end
+        local g = state.fish_gear
+        local colw = (w >= 560) and math.floor((w - 16) / 2) or w
+        for i, b in ipairs(FISH_BONUS) do
+            local ci = (colw < w) and ((i - 1) % 2) or 0
+            local bx = x + ci * (colw + 16)
+            if toggle_chip('##fb_' .. b.key, fit(('%s  +%d'):format(b.label, b.value), colw - 50), g[b.key] == true, bx, yy) then
+                g[b.key] = not g[b.key]; apply_rules(); save_settings()
+            end
+            if ci == 1 or colw == w or i == #FISH_BONUS then yy = yy + lh + 14 end
+        end
+        text(x, yy + 5, HUD.text, 'Feet')
+        local fx = x + text_w('Feet') + 14
+        local fitems = {}
+        for _, f in ipairs(FISH_FEET) do fitems[#fitems + 1] = { f[1], f[2] } end
+        local fp, _, fth = seg_tabs('ch_fish_feet', fitems, tonumber(g.feet) or 0, fx, yy, HUD.accent, true)
+        if fp ~= nil and fp ~= (tonumber(g.feet) or 0) then g.feet = fp; apply_rules(); save_settings() end
+        yy = yy + fth + 10
+        T.rule(x, yy, w); yy = yy + 10
+        local b = FM.rules.bonus
+        local line = b > 0 and ('Fishing %d + %d = %d to land fish'):format(fishing.level, b, fishing.level + b) or 'No fishing gear switched on'
+        text(x, yy, b > 0 and HUD.owned or HUD.faint, fit(line, w))
+        yy = yy + lh + 4
+        return yy - y
+    end)
+
     panel('ch_set_gen', nil, function(x, y, w)
         local yy = y
         T.heading(x, yy, 'General')
@@ -1722,6 +2177,7 @@ end
 local function help()
     msg('/craft - open or close the window   (/crafthub works too)')
     msg('/craft <wood|smith|gold|cloth|leather|bone|alchemy|cook> - focus a craft')
+    msg('/craft fish - fishing: best fish, rod and bait for your skill')
     msg('/craft mode <safe|balanced|fast> - how much breaking you\'ll accept')
     msg('/craft mini - toggle the mini window   /craft follow - toggle following skill-ups')
     msg('/craft kits - toggle using guild kits (Lv 5-50) for the best synth')
@@ -1774,6 +2230,8 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
             remember_decimal(k, skills[k].level, d); save_settings()
             msg(('%s set to %d.%d'):format(C.CRAFTS[k].name, skills[k].level, d))
         end
+    elseif sub == 'fish' or sub == 'fishing' then
+        state.visible[1], state.tab, state.settings = true, 4, false
     elseif sub == 'kits' then
         state.kits = not state.kits; save_settings()
         msg('Guild kits (Lv 5-50) for the best synth: ' .. (state.kits and 'on' or 'off'))
@@ -1802,6 +2260,7 @@ local MIN_CW = 640
 
 ashita.events.register('d3d_present', 'crafthub_present_cb', function()
     refresh_skills()
+    refresh_fishing()
     ICON.new_frame()
     if not state.visible[1] and not state.mini then return end
     refresh_inventory()
@@ -1894,6 +2353,8 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
             render_recipes()
         elseif state.tab == 1 then
             render_best()          -- the craft cards replace the old Overview tab
+        elseif state.tab == 4 then
+            render_fishing()
         elseif state.tab == 3 then
             render_recipes()
         else

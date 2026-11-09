@@ -1,6 +1,6 @@
 # crafthub
 
-An Ashita v4 addon for FFXI that reads your craft skills and shows **the best synth to skill up on right now** in every craft, using the CatseyeXI crafting guide's skill-up path and the full LandSandBoat recipe list.
+An Ashita v4 addon for FFXI that reads your craft skills and shows **the best synth to skill up on right now** in every craft, using the CatseyeXI crafting guide's skill-up path and the full LandSandBoat recipe list. A Fishing tab does the same for fishing: the best fish for your skill, with the rod, bait and where to catch it.
 
 Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's YunaUI.
 
@@ -16,6 +16,12 @@ Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's Yun
   - "Also good right now": other recipes on your server that skill up well at your level. Guild kits have their own list.
 - **Recipes**: every recipe from 11 levels below your skill in the chosen craft to 11 above. The search box finds any recipe in any craft. Guild kits are tagged KIT, and path recipes are tagged GUIDE.
 - **Guild kits**: the guild-vendor kits from Lv 5 to 50 are listed for each craft with live odds. With the "Guild kits (to 50)" toggle on, a kit becomes the best synth whenever it beats the guide's pick. Kit prices rise steeply with level, so turn the toggle off if you'd rather not buy them. When the best or pinned synth can also be made the other way (normal recipe or guild kit), both versions are shown, each with its ingredients, odds and its own Pin button.
+- **Fishing**: the best fish to skill up on, picked from the CatseyeXI fishing route.
+  - The fish's skill-up chance, expected skill per catch, roughly how many catches each level takes, and the chance it gets away because your skill is too low.
+  - The rod and bait to use, with how many you're holding, and where to fish.
+  - Warnings when the fish can escape as too big for the rod, or when a large rod can lose a small fish.
+  - Two lists: **CEXI route** (the guide's fish from 1 to 110) and **All fish** (every fish with a fishing spot that skills you up now, best first). Click a row to pin it.
+  - Your rank, the rank-up test fish, and skill gained this session.
 - **Mini window** (`/craft mini`): a small strip with your focused craft, its level and the best synth, for while you're crafting.
 - **Item icons**: every recipe, ingredient and crystal shows its in-game icon. Icons are read straight from your own FFXI client through Ashita, so nothing is downloaded or bundled. If an icon can't be loaded, a coloured dot is shown instead.
 - **Session tracking**: skill gained and synth count this session. Your exact decimal (e.g. 34.6) is shown once you've had a level-up message, and is remembered between sessions.
@@ -39,6 +45,20 @@ Each recipe gets a score from its expected skill per synth, weighted by its succ
 | **Safe** | Avoids breaks. Typically picks recipes about 1–2 above you. |
 | **Balanced** | The default. Typically 2–3 above you. |
 | **Fast** | Accepts more breaks for bigger, more frequent skill-ups. |
+
+## How the best fish is worked out
+
+The maths is taken from LandSandBoat's `fishingutils.cpp`:
+
+- **Skill-ups** only come from fish above your real skill level, up to 50 above. The chance peaks around 11 above you and is higher at low skill.
+- **Where:** skill-ups come faster outside towns. Below skill 50 they're easier again, but Lu Shang's Fishing Rod slows them down until 50.
+- **Skill-up size:** usually 0.1. One in eight is a bonus of up to 0.3 for fish well above you.
+- **Getting away:** a fish more than 7 levels above your skill (with gear) can get away. It always gets away at 50 or more above.
+- **Gear** (Settings) raises the skill used to land fish, not skill-ups.
+
+The Safe / Balanced / Fast mode works like crafting: Safe avoids fish that get away, Fast takes the biggest skill-ups.
+
+Fishing skill-up rate: **CEXI** x3.0 in every game mode (cap 110), **Retail** x1.0, **LSB** set in Settings (`FISHING_SKILL_MULTIPLIER`).
 
 ## Settings (gear icon)
 
@@ -68,6 +88,8 @@ The gear in the top-right corner opens Settings. You can also type `/craft setti
 | Kupo Shield | +3 | every craft |
 
 Your effective skill (for example Bonecraft 24 + 15 = 39) is shown under the toggles.
+
+**Fishing:** Mega Moglification: Fishing (+5), Fisher's Torque (+2), Fisherman's / Angler's tunica, gloves and hose (+1 each), and boots (+1) or waders (+2). On LSB, set the fishing skill-up rate here too.
 
 **General:** best-synth mode (Safe / Balanced / Fast), follow skill-ups, guild kits, mini window, and showing the whole guide path.
 
@@ -123,6 +145,7 @@ The best synth card shows your HQ chance and tier, with the HQ1 / HQ2 / HQ3 spli
 |---|---|
 | `/craft` (or `/crafthub`) | Open / close the window |
 | `/craft wood` · `smith` · `gold` · `cloth` · `leather` · `bone` · `alchemy` · `cook` | Focus a craft |
+| `/craft fish` | Open the Fishing tab |
 | `/craft mode safe\|balanced\|fast` | How much breaking you'll accept |
 | `/craft mini` | Toggle the mini window |
 | `/craft follow` | Toggle auto-focusing the craft that just skilled up |
@@ -138,6 +161,8 @@ The best synth card shows your HQ chance and tier, with the HQ1 / HQ2 / HQ3 spli
 
 - [CatseyeXI Crafting Guide (bg-wiki)](https://www.bg-wiki.com/ffxi/CatseyeXI_Crafting_Guide): the skill-up path and notes for each craft. One row, Black Chocobo Fletchings, has no LSB recipe and is shown as a note only.
 - [LandSandBoat](https://github.com/LandSandBoat/server): recipes, item names, the success and skill-up formulas, and the skill packet layouts.
+- [CatseyeXI Fishing Guide (bg-wiki)](https://www.bg-wiki.com/ffxi/CatseyeXI/Fishing_Guide): the fishing route, rods, bait and spots. Gerrothorax is level 110 on CEXI.
+- LandSandBoat's fishing tables (`sql/fishing_*.sql`): every fish, rod, bait and fishing area. `tools/gen_fish.py` rebuilds `crafthub_fish.lua`.
 - Rank-up test items: [bg-wiki rank pages](https://www.bg-wiki.com/ffxi/Rank-up_Test), [FFXIclopedia guild pages](https://ffxiclopedia.fandom.com/wiki/Category:Bonecraft) and [Creative Uncut guild pages](https://www.creativeuncut.com/ffxi_guild_alchemy.html). Ranks without a known item say "ask the guild master".
 
 ## Credits
