@@ -303,7 +303,10 @@ local function refresh_skills()
         local s = skills[k]
         local t = saved[C.CRAFTS[k].key]
         if t and t[1] == s.level then
-            s.dec, s.dec_known = t[2], true
+            s.dec, s.dec_known = math.min(9, t[2]), true
+        elseif t and t[1] == s.level + 1 and not s.capped then
+            -- counted past the level before the server says so: hold at N.9 until it does
+            s.dec, s.dec_known = 9, true
         else
             s.dec, s.dec_known = 0, false
         end
@@ -323,7 +326,9 @@ local function refresh_fishing()
     if p then lv, rk, cap = p[1], p[2], p[3] else lv, rk, cap = mem_craft(0) end
     local f = { level = lv or 0, rank = rk or 0, capped = cap or false }
     local t = (char_tenths() or {}).fish
-    if t and t[1] == f.level then f.dec, f.dec_known = t[2], true else f.dec, f.dec_known = 0, false end
+    if t and t[1] == f.level then f.dec, f.dec_known = math.min(9, t[2]), true
+    elseif t and t[1] == f.level + 1 and not f.capped then f.dec, f.dec_known = 9, true
+    else f.dec, f.dec_known = 0, false end
     f.tenths = f.level * 10 + f.dec
     f.cap = C.rank_cap(f.rank)
     if f.level >= f.cap then f.capped = true end
@@ -556,6 +561,54 @@ local function remember_decimal(k, level, dec)
     t[C.CRAFTS[k].key] = { level, dec }
 end
 
+-- Decimal tracking from the chat messages. A skill-up sends "rises 0.X points" (38)
+-- and, when it crosses a level, "reaches level N" (53). The two can arrive in either
+-- order, and on boosted servers one skill-up can be 1.0+ points, so each message is
+-- matched with its partner: the level-up never wipes a carried-over decimal
+-- (34.8 + 0.4 = 35.2, not 35.0), and a rise right after a level-up isn't added twice.
+local PAIR_WINDOW = 2.0       -- seconds; both messages come in the same burst
+local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
+
+local function total_of(ent) return ent and (ent[1] * 10 + ent[2]) or nil end
+local function set_total(t, key, total)
+    t[key] = { math.floor(total / 10), total % 10 }
+end
+
+local function track_rise(key, amount)
+    local t = char_tenths()
+    if not t then return end
+    local prev = total_of(t[key])
+    local r = recent[key]
+    if r and r.kind == 53 and os.clock() - r.at < PAIR_WINDOW then
+        -- the level-up came first: it has already set level N.0
+        recent[key] = nil
+        if r.prev then
+            local new = r.prev + amount
+            if math.floor(new / 10) ~= r.level then new = r.level * 10 end
+            set_total(t, key, new)
+        end
+        return
+    end
+    if prev then set_total(t, key, prev + amount) end
+    recent[key] = { kind = 38, at = os.clock(), prev = prev, amount = amount }
+end
+
+local function track_level(key, level)
+    local t = char_tenths()
+    if not t then return end
+    local r = recent[key]
+    recent[key] = nil
+    if r and r.kind == 38 and os.clock() - r.at < PAIR_WINDOW and r.prev then
+        -- the rise came first and was already added: keep the carry-over if it agrees
+        local new = r.prev + r.amount
+        if math.floor(new / 10) ~= level then new = level * 10 end
+        set_total(t, key, new)
+        return
+    end
+    recent[key] = { kind = 53, at = os.clock(), prev = total_of(t[key]), level = level }
+    t[key] = { level, 0 }
+end
+
 ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
     if e.id == 0x06F or e.id == 0x00A then
         inv_t = -1   -- inventory changes after a synth: re-read it next frame
@@ -584,17 +637,12 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
             local me = nil
             pcall(function() me = AshitaCore:GetMemoryManager():GetParty():GetMemberServerId(0) end)
             if me and struct.unpack('I', e.data, 0x04 + 1) ~= me then return end
-            local t = char_tenths()
             if mid == 38 then
                 local fs = state.fish_session
                 fs.gain, fs.ups = fs.gain + p2, fs.ups + 1
-                local ent = t and t.fish
-                if ent then
-                    local nd = ent[2] + p2
-                    if nd < 10 then ent[2] = nd else t.fish = { ent[1] + 1, nd - 10 } end
-                end
+                track_rise('fish', p2)
             elseif mid == 53 then
-                if t then t.fish = { p2, 0 } end
+                track_level('fish', p2)
                 if state.fish_pkt then state.fish_pkt[1] = p2 end
                 save_settings()
             end
@@ -612,17 +660,10 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
             local ss = state.session[k] or { gain = 0, ups = 0 }
             ss.gain, ss.ups = ss.gain + p2, ss.ups + 1
             state.session[k] = ss
-            -- update the saved decimal directly (the level-up message may have only just
-            -- arrived; refresh_skills only trusts it while its level matches yours)
-            local t = char_tenths()
-            local ent = t and t[C.CRAFTS[k].key]
-            if ent then
-                local nd = ent[2] + p2
-                if nd < 10 then ent[2] = nd else t[C.CRAFTS[k].key] = { ent[1] + 1, nd - 10 } end
-            end
+            track_rise(C.CRAFTS[k].key, p2)
             if state.follow then state.craft = k end
-        elseif mid == 53 then      -- skill reaches level N: decimals are exactly .0 now
-            remember_decimal(k, p2, 0)
+        elseif mid == 53 then      -- skill reaches level N
+            track_level(C.CRAFTS[k].key, p2)
             if state.pkt[k] then state.pkt[k][1] = p2 end
             if state.follow then state.craft = k end
             save_settings()
@@ -2438,6 +2479,7 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
     elseif sub == 'level' and C.BY_KEY[(args[3] or ''):lower()] and tonumber(args[4]) then
         local k = C.BY_KEY[args[3]:lower()]
         local d = math.floor(tonumber(args[4]))
+        if not skills[k] then refresh_skills() end
         if d >= 0 and d <= 9 then
             remember_decimal(k, skills[k].level, d); save_settings()
             msg(('%s set to %d.%d'):format(C.CRAFTS[k].name, skills[k].level, d))
