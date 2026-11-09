@@ -158,6 +158,7 @@ The best synth card shows your HQ chance and tier, with the HQ1 / HQ2 / HQ3 spli
 | `/craft server retail\|lsb\|cexi` | Server rules. `ace`, `cw` or `wew` picks CEXI with that mode's rates switched on |
 | `/craft rate <n>` · `size <n>` · `era` | Your LSB server's skill-up chance, skill-up size, and era rules |
 | `/craft level <craft> <0-9>` | Tell crafthub your current decimal, e.g. `/craft level wood 4` |
+| `/craft trace` | Echo each skill-up crafthub reads, with the decimal it now shows, to check it against the chat log |
 | `/craft debug` | Show the raw skill values read from memory and from the server packet |
 | `/craft reset` | Re-centre and re-fit the window |
 

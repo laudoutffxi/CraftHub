@@ -566,7 +566,7 @@ end
 -- order, and on boosted servers one skill-up can be 1.0+ points, so each message is
 -- matched with its partner: the level-up never wipes a carried-over decimal
 -- (34.8 + 0.4 = 35.2, not 35.0), and a rise right after a level-up isn't added twice.
-local PAIR_WINDOW = 2.0       -- seconds; both messages come in the same burst
+local PAIR_WINDOW = 3         -- seconds (wall clock); both messages come in the same burst
 local recent = {}             -- [key] = { kind = 38 | 53, at, prev, amount, level }
 
 local function total_of(ent) return ent and (ent[1] * 10 + ent[2]) or nil end
@@ -579,7 +579,7 @@ local function track_rise(key, amount)
     if not t then return end
     local prev = total_of(t[key])
     local r = recent[key]
-    if r and r.kind == 53 and os.clock() - r.at < PAIR_WINDOW then
+    if r and r.kind == 53 and os.time() - r.at <= PAIR_WINDOW then
         -- the level-up came first: it has already set level N.0
         recent[key] = nil
         if r.prev then
@@ -590,7 +590,7 @@ local function track_rise(key, amount)
         return
     end
     if prev then set_total(t, key, prev + amount) end
-    recent[key] = { kind = 38, at = os.clock(), prev = prev, amount = amount }
+    recent[key] = { kind = 38, at = os.time(), prev = prev, amount = amount }
 end
 
 local function track_level(key, level)
@@ -598,18 +598,42 @@ local function track_level(key, level)
     if not t then return end
     local r = recent[key]
     recent[key] = nil
-    if r and r.kind == 38 and os.clock() - r.at < PAIR_WINDOW and r.prev then
+    if r and r.kind == 38 and os.time() - r.at <= PAIR_WINDOW and r.prev then
         -- the rise came first and was already added: keep the carry-over if it agrees
         local new = r.prev + r.amount
         if math.floor(new / 10) ~= level then new = level * 10 end
         set_total(t, key, new)
         return
     end
-    recent[key] = { kind = 53, at = os.clock(), prev = total_of(t[key]), level = level }
+    recent[key] = { kind = 53, at = os.time(), prev = total_of(t[key]), level = level }
     t[key] = { level, 0 }
 end
 
+-- The server re-sends a packet until the client acknowledges it, so the same packet
+-- (same bytes, same sequence number) can reach addons more than once. Count each once.
+local seen_pkts, seen_prune = {}, 0
+local function duplicate(e)
+    local now = os.time()
+    local key = e.data
+    local t = seen_pkts[key]
+    seen_pkts[key] = now
+    if now - seen_prune > 30 then
+        for k2, v in pairs(seen_pkts) do if now - v > 30 then seen_pkts[k2] = nil end end
+        seen_prune = now
+    end
+    return t ~= nil and now - t <= 10
+end
+
+-- /craft trace: echo every skill message crafthub reads, to check it against the chat log
+local function trace(fmt, ...)
+    if state.trace then msg(fmt:format(...)) end
+end
+
 ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
+    if (e.id == 0x029 or e.id == 0x06F) and duplicate(e) then
+        if e.id == 0x029 then trace('(ignored a re-sent copy of a message)') end
+        return
+    end
     if e.id == 0x06F or e.id == 0x00A then
         inv_t = -1   -- inventory changes after a synth: re-read it next frame
     end
@@ -661,9 +685,13 @@ ashita.events.register('packet_in', 'crafthub_packet_cb', function(e)
             ss.gain, ss.ups = ss.gain + p2, ss.ups + 1
             state.session[k] = ss
             track_rise(C.CRAFTS[k].key, p2)
+            do local ent = char_tenths() and char_tenths()[C.CRAFTS[k].key]
+                trace('%s rises %.1f -> %s', C.CRAFTS[k].name, p2 / 10, ent and ('%d.%d'):format(ent[1], ent[2]) or 'decimal not known yet') end
             if state.follow then state.craft = k end
         elseif mid == 53 then      -- skill reaches level N
             track_level(C.CRAFTS[k].key, p2)
+            do local ent = char_tenths() and char_tenths()[C.CRAFTS[k].key]
+                trace('%s reaches level %d -> %s', C.CRAFTS[k].name, p2, ent and ('%d.%d'):format(ent[1], ent[2]) or '?') end
             if state.pkt[k] then state.pkt[k][1] = p2 end
             if state.follow then state.craft = k end
             save_settings()
@@ -2431,6 +2459,7 @@ local function help()
     msg('/craft - open or close the window   (/crafthub works too)')
     msg('/craft <wood|smith|gold|cloth|leather|bone|alchemy|cook> - focus a craft')
     msg('/craft fish - fishing: best fish, rod and bait for your skill')
+    msg('/craft trace - echo each skill-up crafthub reads (to check the decimals)')
     msg('/craft mode <safe|balanced|fast> - how much breaking you\'ll accept')
     msg('/craft mini - toggle the mini window   /craft follow - toggle following skill-ups')
     msg('/craft kits - toggle using guild kits (Lv 5-50) for the best synth')
@@ -2489,6 +2518,9 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
     elseif sub == 'kits' then
         state.kits = not state.kits; save_settings()
         msg('Guild kits (Lv 5-50) for the best synth: ' .. (state.kits and 'on' or 'off'))
+    elseif sub == 'trace' then
+        state.trace = not state.trace
+        msg('Skill-up trace ' .. (state.trace and 'on: each skill-up crafthub reads is echoed here' or 'off'))
     elseif sub == 'debug' then
         for k = 1, 8 do
             local lv, rk, cap = mem_craft(k)
