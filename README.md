@@ -95,6 +95,8 @@ The **Synth support +3** switch on the Best synth page turns advanced synthesis 
 
 **Fishing:** Mega Moglification: Fishing (+5), Fisher's Torque (+2), Fisherman's / Angler's tunica, gloves and hose (+1 each), and boots (+1) or waders (+2). On LSB, set the fishing skill-up rate here too.
 
+**Window size:** in General, shrink or grow the whole window (text, icons and layout) from 50% to 150%, e.g. 75% on a Steam Deck. Also `/craft size 75`.
+
 **General:** best-synth mode (Safe / Balanced / Fast), follow skill-ups, guild kits, mini window, and showing the whole guide path.
 
 The CatsEyeXI values come from the [CatseyeXI Crafting Guide](https://www.bg-wiki.com/ffxi/CatseyeXI_Crafting_Guide) and the CatsEyeXI game mode pages on bg-wiki.
@@ -159,6 +161,7 @@ The best synth card shows your HQ chance and tier, with the HQ1 / HQ2 / HQ3 spli
 | `/craft rate <n>` · `size <n>` · `era` | Your LSB server's skill-up chance, skill-up size, and era rules |
 | `/craft level <craft> <0-9>` | Tell crafthub your current decimal, e.g. `/craft level wood 4` |
 | `/craft trace` | Echo each skill-up crafthub reads, with the decimal it now shows, to check it against the chat log |
+| `/craft size <50-150>` | Window size in %, e.g. `/craft size 75` |
 | `/craft debug` | Show the raw skill values read from memory and from the server packet |
 | `/craft reset` | Re-centre and re-fit the window |
 

@@ -110,6 +110,7 @@ local state = {
     kupo = false,       -- Kupo Shield: synthesis skill +3 to every craft
     gear_craft = nil,   -- craft shown in the skill bonuses panel (nil = focused craft)
     fish_rate = 1.0,    -- LSB FISHING_SKILL_MULTIPLIER
+    ui_scale = 1.0,     -- whole-window size (text, icons, layout)
     fish_gear = {},     -- mog, torque, body, hands, legs = bool; feet = 0 / 1 (boots) / 2 (waders)
     fish_pin = nil,     -- fish id pinned on the Fishing tab
     fish_list = 'route',
@@ -421,7 +422,7 @@ local function save_settings()
             path_all = state.path_all, rate = state.rate, modern = state.modern, tenths = state.tenths,
             amount = state.amount, server = state.server, cexi_mode = state.cexi_mode,
             gear = state.gear, kupo = state.kupo,
-            fish_rate = state.fish_rate, fish_gear = state.fish_gear, fish_list = state.fish_list,
+            fish_rate = state.fish_rate, fish_gear = state.fish_gear, fish_list = state.fish_list, ui_scale = state.ui_scale,
             kits = state.kits,
             win_w = state.win_size and state.win_size[1], win_h = state.win_size and state.win_size[2],
         }) .. '\n')
@@ -453,6 +454,7 @@ local function load_settings()
     if type(d.gear) == 'table' then state.gear = d.gear end
     state.kupo = d.kupo == true
     if tonumber(d.fish_rate) and d.fish_rate > 0 then state.fish_rate = d.fish_rate end
+    if tonumber(d.ui_scale) then state.ui_scale = math.max(0.5, math.min(1.5, d.ui_scale)) end
     if type(d.fish_gear) == 'table' then state.fish_gear = d.fish_gear end
     if d.fish_list == 'route' or d.fish_list == 'all' then state.fish_list = d.fish_list end
     if d.modern ~= nil then state.modern = d.modern == true end
@@ -1000,8 +1002,9 @@ local function render_header()
         local total = 0
         for k = 1, 8 do total = total + ((state.session[k] and state.session[k].gain) or 0) end
         local synths = state.synths.ok + state.synths.broke
-        if synths > 0 or total ~= 0 then
-            local a, b = ('+%s'):format(pts(total)), ('%d synths'):format(synths)
+        local a, b = ('+%s'):format(pts(total)), ('%d synths'):format(synths)
+        -- only when it fits beside the tabs (narrow or scaled-down windows skip it)
+        if (synths > 0 or total ~= 0) and gx - 10 - T.dot_pill_w(a, b) >= nx + nav_w + 10 then
             local pw = T.dot_pill_w(a, b)
             right = right - pw
             T.dot_pill(nil, right, y + (row_h - (lh + 8)) * 0.5, a, HUD.owned, b, HUD.muted, true)
@@ -1010,8 +1013,9 @@ local function render_header()
         -- search: in the top row when it fits, otherwise at the right of the second row
         -- (it never disappears, e.g. when the session pill takes the room)
         local sx0 = nx + nav_w + 16
-        local sw = math.min(280, right - sx0)
-        local search_row2 = sw < 160
+        local sc = ui.s or 1
+        local sw = math.min(280 * sc, right - sx0)
+        local search_row2 = sw < 160 * sc
         if not search_row2 then search_box(right - sw, y + (row_h - (lh + 10)) * 0.5, sw) end
 
         -- row 2: who, focused craft, rules
@@ -1019,7 +1023,7 @@ local function render_header()
         local row2_h = lh
         local info_w = w
         if search_row2 then
-            local sw2 = math.max(160, math.min(280, math.floor(w * 0.45)))
+            local sw2 = math.max(160 * sc, math.min(280 * sc, math.floor(w * 0.45)))
             row2_h = lh + 10
             search_box(x + w - sw2, iy, sw2)
             info_w = w - sw2 - 12
@@ -1151,7 +1155,7 @@ local function draw_detail(x, y, w, ev, tag, tag_col, pinned)
     local dl = DL()
 
     -- success ring
-    local R, TH = math.floor(lh * 2.6), 7
+    local R, TH = math.floor(lh * 2.6), math.max(3, math.floor(7 * (ui.s or 1) + 0.5))
     local cx, cy = x + R + TH * 0.5, y + R + TH * 0.5 + 2
     local sc = ev.attempt and success_color(ev.success) or HUD.bad
     -- the ring fills up (and the number counts) when the synth changes
@@ -1164,7 +1168,7 @@ local function draw_detail(x, y, w, ev, tag, tag_col, pinned)
     local tx = x + R * 2 + TH + 18
     local tw = x + w - tx
     local ty = y + 2
-    local isz = 36
+    local isz = math.floor(36 * (ui.s or 1))
     local has_icon = icon_draw(dl, rec.r, x + w - isz, y + 2, isz)
     if has_icon then
         T.chamfer_line(x + w - isz - 0.5, y + 1.5, isz + 1, isz + 1, 6, col(HUD.edge, 0.16), 1)
@@ -1298,10 +1302,16 @@ end
 -- Header for a recipe table. cols = { {label, x_offset, align} }
 -- Column right edges (from the row's right side). ui.compact_rows (set by the
 -- dashboard's narrow list card) drops the HAVE column and packs the rest.
-local ROW_COLS = {
+local ROW_BASE = {
     full    = { lv = 250, su = 170, ps = 82, hv = 0 },
     compact = { lv = 150, su = 86, ps = 0 },
 }
+-- column offsets at the current UI scale
+local ROW_COLS = setmetatable({}, { __index = function(_, kind)
+    local b, sc, out = ROW_BASE[kind], ui.s or 1, {}
+    for key, v in pairs(b) do out[key] = math.floor(v * sc) end
+    return out
+end })
 
 local function row_head(x, y, w)
     local lh = line_h()
@@ -1393,6 +1403,7 @@ local function draw_all_list(x, y, w, k, top, card_y)
     end
     local cx, cy = imgui.GetCursorScreenPos()
     local sy = imgui.GetScrollY() or 0
+    if (#rows * rh > vh) and imgui.IsWindowHovered() then ui.child_hover = true end
     local i0 = math.max(1, math.floor(sy / rh))
     local i1 = math.min(#rows, i0 + math.ceil(vh / rh) + 2)
     local rx, rw = cx + 8, w - (#rows * rh > vh and 6 or 0)
@@ -1446,7 +1457,7 @@ local function render_overview()
     local x0, y0 = imgui.GetCursorScreenPos()
     local w = avail_w()
     local gap = 8
-    local cols = w >= 900 and 4 or (w >= 560 and 2 or 1)
+    local cols = w >= 900 * (ui.s or 1) and 4 or (w >= 560 * (ui.s or 1) and 2 or 1)
     local cw = math.floor((w - gap * (cols - 1)) / cols)
     local ch = lh * 6 + 46
     for k = 1, 8 do
@@ -1756,7 +1767,7 @@ local function render_best()
     local x0, y0 = imgui.GetCursorScreenPos()
     local w = avail_w()
     local gap = 10
-    local two = w >= 720
+    local two = w >= 720 * (ui.s or 1)
     local lw = two and math.floor((w - gap) * 0.52) or w
     local rw = two and (w - gap - lw) or w
     local hl, hr = ui.h.ch_dl or 280, ui.h.ch_dr or 280
@@ -1893,7 +1904,7 @@ local function fish_detail(x, y, w, ev, tag, tag_col)
     local dl = DL()
     local f = ev.fish
     -- skill-up ring
-    local R, TH = math.floor(lh * 2.6), 7
+    local R, TH = math.floor(lh * 2.6), math.max(3, math.floor(7 * (ui.s or 1) + 0.5))
     local cx, cy = x + R + TH * 0.5, y + R + TH * 0.5 + 2
     local sv = T.ease('ch_fring', ev.chance, 6)
     T.ring(cx, cy, R, TH, sv, ev.chance > 0 and success_color(math.min(1, ev.chance + 0.4)) or HUD.bad)
@@ -1903,7 +1914,7 @@ local function fish_detail(x, y, w, ev, tag, tag_col)
     local tx = x + R * 2 + TH + 18
     local tw = x + w - tx
     local ty = y + 2
-    local isz = 36
+    local isz = math.floor(36 * (ui.s or 1))
     local has_icon = icon_draw(dl, f.id or 0, x + w - isz, y + 2, isz)
     local nw = tw - (has_icon and (isz + 10) or 0)
     pill(tx, ty, tag, tag_col or HUD.accent, 0.14)
@@ -2067,7 +2078,7 @@ local function render_fishing()
     local x0, y0 = imgui.GetCursorScreenPos()
     local w = avail_w()
     local gap = 10
-    local two = w >= 720
+    local two = w >= 720 * (ui.s or 1)
     local lw = two and math.floor((w - gap) * 0.52) or w
     local rw = two and (w - gap - lw) or w
     local hl, hr = ui.h.ch_fl or 280, ui.h.ch_fr or 280
@@ -2201,6 +2212,18 @@ local function small_button(id, x, y, label, c)
 end
 
 -- "label   [-] value [+]" stepper. Returns the new value.
+local win = { reset = false }   -- main window position, size and scroll
+
+-- Window size (UI scale), 50%..150%. The window re-fits itself to the new size.
+local function set_scale(v)
+    v = math.max(0.5, math.min(1.5, math.floor(v * 20 + 0.5) / 20))
+    if v == state.ui_scale then return end
+    state.ui_scale = v
+    win.fit_frames, win.scroll = 3, 0
+    ui.h = {}
+    save_settings()
+end
+
 local function stepper(id, x, y, label, value, step, lo, hi)
     local lh = line_h()
     text(x, y + 4, HUD.text, label)
@@ -2298,7 +2321,7 @@ local function render_settings()
         local g = gear_for(gk)
         local function changed() apply_rules(); save_settings() end
         -- per-craft gear, two columns when there's room
-        local colw = (w >= 560) and math.floor((w - 16) / 2) or w
+        local colw = (w >= 560 * (ui.s or 1)) and math.floor((w - 16) / 2) or w
         for i, b in ipairs(BONUS_SOURCES) do
             local ci = (colw < w) and ((i - 1) % 2) or 0
             local bx = x + ci * (colw + 16)
@@ -2356,7 +2379,7 @@ local function render_settings()
             yy = yy + lh + 10
         end
         local g = state.fish_gear
-        local colw = (w >= 560) and math.floor((w - 16) / 2) or w
+        local colw = (w >= 560 * (ui.s or 1)) and math.floor((w - 16) / 2) or w
         for i, b in ipairs(FISH_BONUS) do
             local ci = (colw < w) and ((i - 1) % 2) or 0
             local bx = x + ci * (colw + 16)
@@ -2384,6 +2407,24 @@ local function render_settings()
         local yy = y
         T.heading(x, yy, 'General')
         yy = yy + lh + 10
+        do  -- window size
+            text(x, yy + 4, HUD.text, 'Window size')
+            local bx = x + 190
+            local c1, w1 = small_button('##st_scale_m', bx, yy, '-')
+            local vs = ('%d%%'):format(math.floor((state.ui_scale or 1) * 100 + 0.5))
+            text(bx + w1 + 10, yy + 4, HUD.accent2, vs)
+            local c2, w2 = small_button('##st_scale_p', bx + w1 + 20 + text_w('150%'), yy, '+')
+            local rx = bx + w1 + 20 + text_w('150%') + w2 + 14
+            if (state.ui_scale or 1) ~= 1 then
+                local c3 = small_button('##st_scale_r', rx, yy, 'Reset')
+                if c3 then set_scale(1) end
+            end
+            if c1 then set_scale((state.ui_scale or 1) - 0.05) end
+            if c2 then set_scale((state.ui_scale or 1) + 0.05) end
+            yy = yy + lh + 14
+            yy = yy + wrap(x, yy, w, HUD.faint, 'Shrinks or grows the whole window: text, icons and layout. Also /craft size 50-150.')
+            yy = yy + 8
+        end
         text(x, yy + 4, HUD.subtext, 'Best synth picks')
         local items = { { 'safe', 'SAFE' }, { 'balanced', 'BALANCED' }, { 'fast', 'FAST' } }
         local picked, _, th = seg_tabs('ch_set_mode', items, state.mode, x + 190, yy, HUD.accent, true)
@@ -2420,13 +2461,15 @@ local function render_mini()
     local W = 340
     local H = lh * 3 + 40
     T.push_style()
-    local fp = T.push_font()
+    ui.s = state.ui_scale or 1
+    local fp, fsized = T.push_font()
     imgui.SetNextWindowSize({ W, H }, ImGuiCond_Always)
     place_window(mini_win, W, H)
     undock_next()
     local flags = bit.bor(ImGuiWindowFlags_NoTitleBar, ImGuiWindowFlags_NoCollapse, ImGuiWindowFlags_NoMove,
         ImGuiWindowFlags_NoResize, ImGuiWindowFlags_NoScrollbar, NO_DOCK)
     if imgui.Begin('crafthub mini##crafthub_mini', state.mini_open, flags) then
+        T.scale_window(fsized)
         local x, y = imgui.GetCursorScreenPos()
         local w = W - 28
         local lv = lvl_text(s)
@@ -2469,6 +2512,7 @@ local function help()
     msg('/craft <wood|smith|gold|cloth|leather|bone|alchemy|cook> - focus a craft')
     msg('/craft fish - fishing: best fish, rod and bait for your skill')
     msg('/craft trace - echo each skill-up crafthub reads (to check the decimals)')
+    msg('/craft size <50-150> - window size in %, e.g. /craft size 75')
     msg('/craft mode <safe|balanced|fast> - how much breaking you\'ll accept')
     msg('/craft mini - toggle the mini window   /craft follow - toggle following skill-ups')
     msg('/craft kits - toggle using guild kits (Lv 5-50) for the best synth')
@@ -2479,7 +2523,6 @@ local function help()
     msg('/craft reset - re-centre and re-fit the window   /craft debug - show raw skill values')
 end
 
-local win = { reset = false }
 
 ashita.events.register('command', 'crafthub_command_cb', function(e)
     local args = e.command:args()
@@ -2493,6 +2536,11 @@ ashita.events.register('command', 'crafthub_command_cb', function(e)
     elseif sub == 'show' then state.visible[1] = true
     elseif sub == 'hide' then state.visible[1] = false
     elseif sub == 'help' then help()
+    elseif (sub == 'size' or sub == 'scale') and tonumber(args[3]) then
+        local v = tonumber(args[3])
+        if v > 3 then v = v / 100 end      -- accept 80 or 0.8
+        set_scale(v)
+        msg(('Window size %d%%'):format(math.floor(state.ui_scale * 100 + 0.5)))
     elseif sub == 'mini' then state.mini = not state.mini; save_settings()
     elseif sub == 'follow' then
         state.follow = not state.follow; save_settings()
@@ -2572,11 +2620,12 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
     if not state.visible[1] then return end
 
     T.push_style()
-    local font_pushed = T.push_font()
+    ui.s = state.ui_scale or 1
+    local font_pushed, font_sized = T.push_font()
 
     local io_ok, io = pcall(imgui.GetIO)
     local sh = (io_ok and io and io.DisplaySize and io.DisplaySize.y) or 1080
-    local need = math.max(MIN_CW, ui.header_need or 0, ui.picker_need or 0, ui.ctl_need or 0, ui.ov_need or 0, ui.gear_need or 0)
+    local need = math.max(MIN_CW * (ui.s or 1), ui.header_need or 0, ui.picker_need or 0, ui.ctl_need or 0, ui.ov_need or 0, ui.gear_need or 0)
     local min_cw = need + ui.inset * 2
     local min_w = min_cw + PAD_X * 2 + SCROLL_W
     local fit_w = min_w
@@ -2607,17 +2656,24 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
         win.set_size = false
     end
     place_window(win, win.size[1], win.size[2])
-    if win.content_h and type(imgui.SetNextWindowContentSize) == 'function' then
-        imgui.SetNextWindowContentSize({ 0, win.content_h })
-    end
 
-    -- ImGui's own scrollbar runs into the rounded corners, so it's hidden and
-    -- drawn by hand below (the mouse wheel still scrolls).
+    -- Scrolling is done by crafthub itself, not by ImGui: the content is drawn shifted
+    -- up by win.scroll and clipped by the window. ImGui's own window scroll didn't
+    -- always move the content (seen on Steam Deck), and its scrollbar runs into the
+    -- rounded corners, so both are off; the wheel and the bar on the right drive win.scroll.
     local flags = bit.bor(ImGuiWindowFlags_NoTitleBar, ImGuiWindowFlags_NoCollapse, ImGuiWindowFlags_NoMove,
-        ImGuiWindowFlags_NoScrollbar, NO_DOCK)
+        ImGuiWindowFlags_NoScrollbar, ImGuiWindowFlags_NoScrollWithMouse or 16, NO_DOCK)
     undock_next()
     if imgui.Begin('Craft Hub##crafthub_main', state.visible, flags) then
+        T.scale_window(font_sized)
         pcall(imgui.SetScrollX, 0)
+        pcall(imgui.SetScrollY, 0)
+        win.scroll = win.scroll or 0
+        do
+            local cx0, cy0 = imgui.GetCursorScreenPos()
+            imgui.SetCursorScreenPos({ cx0, cy0 - win.scroll })
+        end
+        ui.child_hover = false
         local _, top = imgui.GetCursorScreenPos()
         local ww, wh = imgui.GetWindowSize()
         if tonumber(ww) and tonumber(wh) then
@@ -2660,8 +2716,17 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
         win.content_h = math.max(60, bottom - top)
         local view_h = (tonumber(wh) or 0) - PAD_Y * 2
         local max_scroll = math.max(0, win.content_h - view_h)
-        local sy = tonumber(call(imgui.GetScrollY)) or 0
-        if sy > max_scroll + 0.5 then pcall(imgui.SetScrollY, max_scroll) end
+        -- mouse wheel / trackpad over the window (the ALL list scrolls itself)
+        do
+            local okh, hov = pcall(imgui.IsWindowHovered, ImGuiHoveredFlags_ChildWindows or 1)
+            local okio, io2 = pcall(imgui.GetIO)
+            local wheel = okio and io2 and tonumber(io2.MouseWheel) or 0
+            if okh and hov and not ui.child_hover and wheel ~= 0 then
+                win.scroll = win.scroll - wheel * line_h() * 3
+            end
+        end
+        win.scroll = math.max(0, math.min(max_scroll, win.scroll))
+        local sy = win.scroll
         -- thin scrollbar in the right padding, starting and ending clear of the
         -- rounded corners. Drag the bar, or click the track to jump there.
         local wx, wy = call(imgui.GetWindowPos)
@@ -2678,7 +2743,7 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
                 if call(imgui.IsMouseDown, 0) and my then
                     local v = win.sdrag[2] + (my - win.sdrag[1]) / math.max(1, th - gh) * max_scroll
                     sy = math.max(0, math.min(max_scroll, v))
-                    pcall(imgui.SetScrollY, sy)
+                    win.scroll = sy
                 else
                     win.sdrag = nil
                 end
@@ -2686,7 +2751,7 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
                 local gy0 = t1 + (th - gh) * (sy / max_scroll)
                 if my < gy0 or my > gy0 + gh then
                     sy = math.max(0, math.min(max_scroll, (my - t1 - gh * 0.5) / math.max(1, th - gh) * max_scroll))
-                    pcall(imgui.SetScrollY, sy)
+                    win.scroll = sy
                 end
                 win.sdrag = { my, sy }
             end

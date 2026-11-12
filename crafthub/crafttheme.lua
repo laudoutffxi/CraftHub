@@ -725,7 +725,7 @@ local tfont = {}            -- b = bold, l = light (filled by load_font)
 local function push_tfont(f)
     if f == nil then return false end
     local ok
-    if f.LegacySize ~= nil then ok = pcall(imgui.PushFont, f, TITLE_PX) else ok = pcall(imgui.PushFont, f) end
+    if f.LegacySize ~= nil then ok = pcall(imgui.PushFont, f, TITLE_PX * (ui.s or 1)) else ok = pcall(imgui.PushFont, f) end
     return ok and true or false
 end
 
@@ -735,9 +735,9 @@ local function spaced_word(x, y, s, c)
     for i = 1, #s do
         local ch = s:sub(i, i)
         if c then text(cx, y, c, ch) end
-        cx = cx + text_w(ch) + TITLE_SP
+        cx = cx + text_w(ch) + TITLE_SP * (ui.s or 1)
     end
-    return cx - x - TITLE_SP
+    return cx - x - TITLE_SP * (ui.s or 1)
 end
 
 local function title_parts(s)
@@ -752,7 +752,7 @@ local function title_w(s)
     if p then imgui.PopFont() end
     if rest ~= '' then
         p = push_tfont(tfont.l)
-        w = w + TITLE_GAP * 2 + 1 + spaced_word(0, 0, rest, nil)
+        w = w + TITLE_GAP * (ui.s or 1) * 2 + 1 + spaced_word(0, 0, rest, nil)
         if p then imgui.PopFont() end
     end
     return w
@@ -822,12 +822,12 @@ local function title_text(x, y, h, s, c)
             if not p then text(cx + 0.6, ty + dy, { cc[1], cc[2], cc[3], alpha }, ch) end
         end
         if sp and sp < 1 then spark(dl, cx + cw * 0.5, ty + lh - 1, sp, hot) end
-        cx = cx + cw + TITLE_SP
+        cx = cx + cw + TITLE_SP * (ui.s or 1)
     end
-    local w1 = cx - x - TITLE_SP
+    local w1 = cx - x - TITLE_SP * (ui.s or 1)
     if p then imgui.PopFont() end
     if rest == '' then return end
-    local dx = x + w1 + TITLE_GAP
+    local dx = x + w1 + TITLE_GAP * (ui.s or 1)
     local mid = y + h * 0.5
     DL():AddRectFilled({ dx, mid - lh * 0.42 }, { dx + 1, mid + lh * 0.42 }, col(C.accent, 0.55))
     p = push_tfont(tfont.l)
@@ -923,12 +923,33 @@ local function load_font()
     load_title_fonts(dir)
 end
 
--- Push the font; newer ImGui (fonts with LegacySize) wants a size. Returns true if pushed.
+-- Push the font at the UI scale (ui.s); newer ImGui (fonts with LegacySize) takes a
+-- size. Returns pushed, sized. When it couldn't size the font, call scale_window()
+-- right after Begin so the window's text is scaled instead.
 local function push_font()
-    if font == nil then return false end
+    local sc = ui.s or 1
+    if font == nil then
+        -- no Segoe UI (e.g. Proton / Steam Deck): size the default font if this ImGui can
+        if sc ~= 1 and type(imgui.GetFont) == 'function' then
+            local okf, df = pcall(imgui.GetFont)
+            if okf and df and df.LegacySize ~= nil and pcall(imgui.PushFont, df, (tonumber(df.LegacySize) or 13) * sc) then
+                return true, true
+            end
+        end
+        return false, false
+    end
     local ok
-    if font.LegacySize ~= nil then ok = pcall(imgui.PushFont, font, 17) else ok = pcall(imgui.PushFont, font) end
-    return ok and true or false
+    if font.LegacySize ~= nil then
+        ok = pcall(imgui.PushFont, font, 17 * sc)
+        return ok and true or false, ok and true or false
+    end
+    ok = pcall(imgui.PushFont, font)
+    return ok and true or false, false
+end
+
+-- Older ImGui: scale the current window's text when the font couldn't be sized.
+local function scale_window(sized)
+    if not sized then pcall(imgui.SetWindowFontScale, ui.s or 1) end
 end
 
 local function pop_font(pushed)
@@ -993,6 +1014,6 @@ return {
     shadow = shadow, ease = ease, blueprint = blueprint, panel = panel, band = band,
     title_w = title_w, title_text = title_text, logo = logo, close_button = close_button,
     draw_window_frame = draw_window_frame, dot_pill = dot_pill, dot_pill_w = dot_pill_w,
-    load_font = load_font, push_font = push_font, pop_font = pop_font,
+    load_font = load_font, push_font = push_font, pop_font = pop_font, scale_window = scale_window,
     push_style = push_style, pop_style = pop_style,
 }
