@@ -6,8 +6,9 @@ Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's Yun
 
 ## What it shows
 
-- **Overview**: all eight crafts at once. Each card shows your level and rank, progress to the rank cap, and the best synth right now. Capped crafts and open rank tests are flagged.
-- **Best synth**: a detailed view for one craft.
+- **Two tabs**: **Crafting** and **Fishing**.
+- **Craft cards** (top of Crafting): all eight crafts at once. Each card shows your level and rank, progress to the rank cap, and the best synth right now. Capped crafts and open rank tests are flagged.
+- **Crafting**: a detailed view for the craft you pick.
   - The recommended recipe, with success chance, skill-up chance, expected skill per synth and roughly how many synths each level takes.
   - The crystal and ingredients, with how many of each you're holding and how many synths you can make now.
   - Any sub-craft requirements, checked against your own levels.
@@ -16,7 +17,7 @@ Look and feel: VanaCore style, with a glass dashboard finish based on Yuna's Yun
   - Any other recipe that beats the guide's best pick at your level (by 5% or more) is added to the path in level order, and can be the best synth. The top recipe is tagged **BEST** (several if they score the same) and the added ones just under it are tagged **GOOD**. Once you out-level one, it drops off the path and is only in Also good.
   - "Also good right now": other recipes on your server that skill up well at your level. Guild kits have their own list.
   - **All**: every recipe for that craft on your server, guild kits included, plus CatsEyeXI's custom recipes when CEXI is picked. It's sorted by level, opens at your level, and scrolls. Recipes are tagged BEST, CEXI, KIT or GUIDE, and any row can be pinned.
-- **Recipes**: every recipe from 11 levels below your skill in the chosen craft to 11 above. The search box finds any recipe in any craft. Guild kits are tagged KIT, and path recipes are tagged GUIDE.
+- **Search**: the search box at the top finds any recipe in any craft. Click a result to open it in Crafting. Guild kits are tagged KIT, and path recipes are tagged GUIDE.
 - **Guild kits**: the guild-vendor kits from Lv 5 to 50 are listed for each craft with live odds. With the "Guild kits (to 50)" toggle on, a kit becomes the best synth whenever it beats the guide's pick. Kit prices rise steeply with level, so turn the toggle off if you'd rather not buy them. When the best or pinned synth can also be made the other way (normal recipe or guild kit), both versions are shown, each with its ingredients, odds and its own Pin button.
 - **Fishing**: the best fish to skill up on, picked from the CatseyeXI fishing route.
   - The fish's skill-up chance, expected skill per catch, roughly how many catches each level takes, and the chance it gets away because your skill is too low.

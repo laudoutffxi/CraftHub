@@ -433,7 +433,7 @@ end
 local function load_settings()
     local ok, d = pcall(dofile, settings_file())
     if not ok or type(d) ~= 'table' then return end
-    if tonumber(d.tab) and d.tab >= 1 and d.tab <= 4 then state.tab = d.tab end
+    if tonumber(d.tab) then state.tab = (d.tab == 4) and 4 or 2 end   -- old Best synth / Recipes tabs -> Crafting
     if tonumber(d.craft) and d.craft >= 1 and d.craft <= 8 then state.craft = d.craft end
     if C.MODES[d.mode or ''] then state.mode = d.mode end
     state.mini = d.mini == true
@@ -974,8 +974,7 @@ local TITLE = 'CRAFT HUB'
 local function render_header()
     local lh = line_h()
     local nav = {
-        { 2, 'BEST SYNTH' },
-        { 3, 'RECIPES' },
+        { 2, 'CRAFTING' },
         { 4, 'FISHING', tostring(fishing.level) },
     }
     band('ch_hdr', function(x, y, w)
@@ -985,7 +984,7 @@ local function render_header()
         T.title_text(x, y, row_h, TITLE, HUD.text)
         local title_w = T.title_w(TITLE)
         local nx = x + title_w + 18
-        local active = state.settings and 0 or (state.tab == 1 and 2 or state.tab)
+        local active = state.settings and 0 or (state.tab == 4 and 4 or 2)
         local picked = seg_tabs('ch_tab', nav, active, nx, y + (row_h - nav_h) * 0.5, HUD.accent, false)
         if picked and (picked ~= state.tab or state.settings) then
             state.tab, state.settings = picked, false
@@ -2123,18 +2122,14 @@ local function render_fishing()
     end)
 end
 
--- RECIPES tab shows recipes this many levels either side of your skill in the chosen craft.
-local RECIPE_SPAN = 11
 
--- RECIPES: everything around your level for the focused craft, or search results.
+-- Search results (any craft), shown while the search box has text.
 local function render_recipes()
     local lh = line_h()
     local q = (state.search[1] or ''):lower()
-    local searching = q:find('%S') ~= nil
-    if not searching then render_craft_picker() end
-    local k = state.craft
+    local searching = true
     local list = {}
-    if searching then
+    do
         for _, rec in pairs(D.recipes) do
             if rec.n:lower():find(q, 1, true) and rec.main and C.available(rec) then
                 list[#list + 1] = C.evaluate(rec, rec.main, skills)
@@ -2145,24 +2140,11 @@ local function render_recipes()
             if a.level ~= b.level then return a.level < b.level end
             return a.rec.id < b.rec.id
         end)
-    else
-        local lv = skills[k].level
-        for _, rec in ipairs(BY_CRAFT[k]) do
-            local l = rec.lv[k]
-            if l >= lv - RECIPE_SPAN and l <= lv + RECIPE_SPAN and C.available(rec) then
-                list[#list + 1] = C.evaluate(rec, k, skills)
-            end
-        end
     end
     local shown = math.min(#list, 300)
     panel('ch_rec', nil, function(x, y, w)
         local yy = y
-        if searching then
-            T.heading(x, yy, 'Search', ('%d recipes match "%s"'):format(#list, q))
-        else
-            T.heading(x, yy, C.CRAFTS[k].name, ('recipes from %d to %d (%d)'):format(
-                math.max(1, skills[k].level - RECIPE_SPAN), skills[k].level + RECIPE_SPAN, #list))
-        end
+        T.heading(x, yy, 'Search', ('%d recipes match "%s"'):format(#list, q))
         if shown < #list then rtext(x + w, yy, HUD.faint, ('showing first %d'):format(shown)) end
         yy = yy + lh + 8
         yy = yy + row_head(x, yy, w)
@@ -2702,12 +2684,8 @@ ashita.events.register('d3d_present', 'crafthub_present_cb', function()
             render_settings()
         elseif (state.search[1] or ''):find('%S') then
             render_recipes()
-        elseif state.tab == 1 then
-            render_best()          -- the craft cards replace the old Overview tab
         elseif state.tab == 4 then
             render_fishing()
-        elseif state.tab == 3 then
-            render_recipes()
         else
             render_best()
         end
